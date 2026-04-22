@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "qsp-codegen"
+version = "0.1.0"
+description = "SBML → C++ CVODE ODE code generator for QSP models."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Joel Eliason", email = "jeliaso2@jh.edu" }]
+dependencies = [
+    "sympy>=1.11",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+qsp-codegen = "qsp_codegen.codegen:main"
+qsp-refresh-param-xml = "qsp_codegen.refresh_param_xml:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/qsp_codegen"]
