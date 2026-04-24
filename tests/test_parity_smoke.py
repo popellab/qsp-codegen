@@ -38,6 +38,54 @@ def test_compare_detects_divergence(tmp_path: Path):
     assert "V_T.CD8" in report
 
 
+def test_run_cpp_trajectories_rejects_missing_binary(tmp_path: Path):
+    with pytest.raises(FileNotFoundError, match="qsp_sim binary not found"):
+        parity.run_cpp_trajectories(
+            qsp_sim=tmp_path / "nope",
+            param_xml=tmp_path / "nope.xml",
+            out_csv=tmp_path / "out.csv",
+            t_end_days=1, dt_days=0.1,
+        )
+
+
+def test_run_cpp_trajectories_requires_drug_metadata_with_scenario(tmp_path: Path):
+    """Passing scenario_yaml without drug_metadata_yaml should be a hard fail
+    (the binary needs the MW/dose-basis table to interpret doses)."""
+    # fake the binary + xml so we reach the kwargs validation
+    fake_bin = tmp_path / "qsp_sim"
+    fake_bin.write_text("")
+    fake_bin.chmod(0o755)
+    fake_xml = tmp_path / "param.xml"
+    fake_xml.write_text("<root/>")
+    scenario = tmp_path / "s.yaml"
+    scenario.write_text("stop_time: 1\n")
+    with pytest.raises(ValueError, match="drug_metadata_yaml is required"):
+        parity.run_cpp_trajectories(
+            qsp_sim=fake_bin,
+            param_xml=fake_xml,
+            out_csv=tmp_path / "out.csv",
+            t_end_days=1, dt_days=0.1,
+            scenario_yaml=scenario,
+        )
+
+
+def test_run_cpp_trajectories_validates_kwarg_paths(tmp_path: Path):
+    """Missing scenario / drug-metadata / evolve YAML surfaces a clear error."""
+    fake_bin = tmp_path / "qsp_sim"
+    fake_bin.write_text("")
+    fake_bin.chmod(0o755)
+    fake_xml = tmp_path / "param.xml"
+    fake_xml.write_text("<root/>")
+    with pytest.raises(FileNotFoundError, match="evolve_to_diagnosis_yaml not found"):
+        parity.run_cpp_trajectories(
+            qsp_sim=fake_bin,
+            param_xml=fake_xml,
+            out_csv=tmp_path / "out.csv",
+            t_end_days=1, dt_days=0.1,
+            evolve_to_diagnosis_yaml=tmp_path / "missing_healthy.yaml",
+        )
+
+
 def test_sync_check_sbml_newer_than_matlab_handles_missing(tmp_path: Path):
     ok, msg = sync_checks.check_sbml_newer_than_matlab(
         sbml=tmp_path / "does_not_exist.sbml",
