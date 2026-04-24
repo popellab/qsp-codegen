@@ -12,6 +12,7 @@ license = { text = "MIT" }
 authors = [{ name = "Joel Eliason", email = "jeliaso2@jh.edu" }]
 dependencies = [
     "sympy>=1.11",
+    "numpy>=1.22",
 ]
 
 [project.optional-dependencies]
