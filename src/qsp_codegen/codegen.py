@@ -1471,8 +1471,9 @@ def gen_ode_cpp(sbml: SBMLModel, mapping: dict) -> str:
     lines.append('}')
     lines.append('')
 
-    # Stubs (non-event)
-    lines.append('void ODE_system::update_y_other(void){ }')
+    # Stubs (non-event). update_y_other is emitted later, after
+    # eval_init_assignment, so it can share the assignment-rule writeback
+    # block (see `emit_ar_species_writeback` in the init-assignment emit).
     lines.append('void ODE_system::adjust_hybrid_variables(void){ }')
 
     # --- Events --------------------------------------------------------
@@ -1746,9 +1747,16 @@ def gen_ode_cpp(sbml: SBMLModel, mapping: dict) -> str:
     # set is closed.
     comp_names_set = {c["name"] for c in sbml.compartments}
     param_by_name = {p["name"]: p for p in sbml.parameters}
+    # Exclude rules whose LHS is a compartment (handled by get_compartment_volume)
+    # OR a species (already emitted in the species dump via getVarOriginalUnit's
+    # switch; emitting again here produces duplicate CSV columns and a stale
+    # second copy because the standalone get_assignment_rule_value path doesn't
+    # go through the same scaling fix-ups).
+    sp_names_set_ar = {sp["name"] for sp in sbml.species}
     non_comp_rules = [
         r for r in sbml.assignment_rules
         if r["variable_name"] not in comp_names_set
+        and r["variable_name"] not in sp_names_set_ar
     ]
     # Pre-build sanitized → variable_name lookup so we can resolve
     # AUX_VAR_<sanitized> tokens back to the original rule name.
@@ -1905,7 +1913,27 @@ def gen_ode_cpp(sbml: SBMLModel, mapping: dict) -> str:
     ar_species = [(r, sp_by_name[r["variable_name"]])
                   for r in sbml.assignment_rules
                   if r["variable_name"] in sp_by_name]
-    if ar_species:
+
+    def _emit_ar_species_writeback(out_lines: List[str], header_comment: str):
+        """Emit rule-species evaluation + writeback block.
+
+        Reads SBML species/parameter values via `_species_var[]` and
+        `_class_parameter[]` (no `y` in scope — fits eval_init_assignment
+        and update_y_other). For each assignment rule that targets a
+        species, writes the rule-computed value to both `_species_var[]`
+        and `NV_DATA_S(_y)[]` so post-step CSV dumps and downstream
+        consumers see the correct value.
+
+        Called from two sites:
+          - eval_init_assignment: initialize rule species at t=0.
+          - update_y_other: after each CVode step, re-evaluate rule
+            species since save_y() copies _y -> _species_var and
+            overwrites the rule value f() wrote (ydot=0 for rule species
+            means _y never changes, so _species_var is pinned at the
+            initial XML value — 0 for new rule species).
+        """
+        if not ar_species:
+            return
         # Build mapping using _species_var[] instead of SPVAR() (no y in scope)
         ar_mapping = {}
         rule_names_ar = {r["variable_name"] for r in sbml.assignment_rules}
@@ -1953,18 +1981,18 @@ def gen_ode_cpp(sbml: SBMLModel, mapping: dict) -> str:
         needed_list = [r for r in sbml.assignment_rules if r["variable_name"] in needed_rules]
         ordered_needed = order_rules(needed_list, needed_rules, sbml=sbml)
 
-        lines.append('')
-        lines.append('    // Evaluate assignment-rule species so _species_var is correct at step 0')
+        out_lines.append('')
+        out_lines.append(f'    // {header_comment}')
         for r in ordered_needed:
             vn = r["variable_name"]
             san = _sanitize(vn)
             cpp_expr = wrap_expression(r["expression"], ar_mapping)
-            lines.append(f'    realtype AUX_VAR_{san} = {cpp_expr};')
+            out_lines.append(f'    realtype AUX_VAR_{san} = {cpp_expr};')
             # Write back to _species_var if this rule targets a species
             if vn in sp_by_name:
                 sp = sp_by_name[vn]
                 if sp.get("has_only_substance_units", False):
-                    lines.append(f'    _species_var[SP_{san}] = AUX_VAR_{san};')
+                    out_lines.append(f'    _species_var[SP_{san}] = AUX_VAR_{san};')
                 else:
                     comp_name = sp["compartment"]
                     comp_san = _sanitize(comp_name)
@@ -1972,9 +2000,30 @@ def gen_ode_cpp(sbml: SBMLModel, mapping: dict) -> str:
                         vol_expr = f'AUX_VAR_{comp_san}'
                     else:
                         vol_expr = f'_class_parameter[P_{comp_san}]'
-                    lines.append(f'    _species_var[SP_{san}] = AUX_VAR_{san} * {vol_expr};')
-                lines.append(f'    NV_DATA_S(_y)[SP_{san}] = _species_var[SP_{san}];')
+                    out_lines.append(f'    _species_var[SP_{san}] = AUX_VAR_{san} * {vol_expr};')
+                out_lines.append(f'    NV_DATA_S(_y)[SP_{san}] = _species_var[SP_{san}];')
 
+    _emit_ar_species_writeback(
+        lines,
+        'Evaluate assignment-rule species so _species_var is correct at step 0',
+    )
+
+    lines.append('}')
+    lines.append('')
+
+    # ---------------------------------------------------------------
+    # update_y_other: called by CVODEBase after every integration step.
+    # save_y() copies _y -> _species_var, which wipes the rule-species
+    # values that f() wrote during the step (ydot=0 for rule species, so
+    # _y stays at its initial XML value — 0 for newly-introduced rule
+    # species). Re-evaluate rules here so operator<< / getVarOriginalUnit
+    # emit correct values in the CSV dump.
+    # ---------------------------------------------------------------
+    lines.append('void ODE_system::update_y_other(void){')
+    _emit_ar_species_writeback(
+        lines,
+        'Re-evaluate assignment-rule species after save_y() overwrote them',
+    )
     lines.append('}')
     lines.append('')
 
