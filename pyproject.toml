@@ -12,6 +12,7 @@ license = { text = "MIT" }
 authors = [{ name = "Joel Eliason", email = "jeliaso2@jh.edu" }]
 dependencies = [
     "sympy>=1.11",
+    "numpy>=1.22",
 ]
 
 [project.optional-dependencies]
@@ -23,3 +24,9 @@ qsp-refresh-param-xml = "qsp_codegen.refresh_param_xml:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/qsp_codegen"]
+
+# Ship the MATLAB parity-harness scripts so qsp_codegen.parity.matlab_asset_dir()
+# resolves to a real path at runtime, not a bare __init__.py.
+[tool.hatch.build.targets.wheel.force-include]
+"src/qsp_codegen/parity/export_matlab_trajectories.m" = "qsp_codegen/parity/export_matlab_trajectories.m"
+"src/qsp_codegen/parity/yaml_read.m" = "qsp_codegen/parity/yaml_read.m"
