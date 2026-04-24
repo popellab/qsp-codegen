@@ -21,12 +21,28 @@ dev = ["pytest>=7"]
 [project.scripts]
 qsp-codegen = "qsp_codegen.codegen:main"
 qsp-refresh-param-xml = "qsp_codegen.refresh_param_xml:main"
+qsp-codegen-cmake = "qsp_codegen.cmake:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/qsp_codegen"]
 
 # Ship the MATLAB parity-harness scripts so qsp_codegen.parity.matlab_asset_dir()
 # resolves to a real path at runtime, not a bare __init__.py.
+#
+# Also ship the C++ driver + library sources (CVODEBase, ParamBase, hook
+# header, CMake package config) so consumers can `find_package(qsp_sim_core)`
+# after adding `qsp_codegen.cmake.cmake_dir()` to their CMAKE_PREFIX_PATH.
 [tool.hatch.build.targets.wheel.force-include]
 "src/qsp_codegen/parity/export_matlab_trajectories.m" = "qsp_codegen/parity/export_matlab_trajectories.m"
 "src/qsp_codegen/parity/yaml_read.m" = "qsp_codegen/parity/yaml_read.m"
+"cpp/CMakeLists.txt" = "qsp_codegen/cpp/CMakeLists.txt"
+"cpp/cmake/qsp_sim_coreConfig.cmake" = "qsp_codegen/cpp/cmake/qsp_sim_coreConfig.cmake"
+"cpp/cmake/QspSimCoreDeps.cmake" = "qsp_codegen/cpp/cmake/QspSimCoreDeps.cmake"
+"cpp/include/qsp_sim_core/CVODEBase.h" = "qsp_codegen/cpp/include/qsp_sim_core/CVODEBase.h"
+"cpp/include/qsp_sim_core/MolecularModelCVode.h" = "qsp_codegen/cpp/include/qsp_sim_core/MolecularModelCVode.h"
+"cpp/include/qsp_sim_core/ParamBase.h" = "qsp_codegen/cpp/include/qsp_sim_core/ParamBase.h"
+"cpp/include/qsp_sim_core/model_hooks.h" = "qsp_codegen/cpp/include/qsp_sim_core/model_hooks.h"
+"cpp/src/CVODEBase.cpp" = "qsp_codegen/cpp/src/CVODEBase.cpp"
+"cpp/src/ParamBase.cpp" = "qsp_codegen/cpp/src/ParamBase.cpp"
+"cpp/src/default_hooks.cpp" = "qsp_codegen/cpp/src/default_hooks.cpp"
+"cpp/src/qsp_sim_main.cpp" = "qsp_codegen/cpp/src/qsp_sim_main.cpp"
