@@ -368,10 +368,12 @@ double scale_amount_to_storage(const std::string& units, double amount_in_units)
     // AmountUnits='mole'.
     if (units == "mole")      return amount_in_units;
     if (units == "cell")      return amount_in_units / 6.02214076e23;
-    // Some species (e.g. cyclophosphamide's V_C.Cy) are stored natively
-    // in milligrams in the SBML (substanceUnits=milligram); an mg dose
-    // is added to the state directly.
-    if (units == "milligram") return amount_in_units;
+    // The SBML declares V_C.Cy with substanceUnits=milligram, but the
+    // codegen rescales the state to SI (kilogram) at setup time via the
+    // species unit-conversion factor (1e-6 for mg → kg). A dose declared
+    // in mg must be scaled by the same factor so it lands in kg storage;
+    // otherwise a 380 mg dose shows up as 380 kg of Cy (≈1e6× too big).
+    if (units == "milligram") return amount_in_units * 1e-6;
     throw std::runtime_error("unknown dose units: " + units);
 }
 
