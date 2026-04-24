@@ -37,3 +37,63 @@ Not needed for parameter-value tweaks.
   falls back to numerical Jacobian otherwise.
 - Consumer-side invariants (sync checks, ABM-specific param codegen) are
   *not* in scope — they live in the consumer repo.
+
+## Bundled C++ driver (`qsp_sim_core`)
+
+The wheel also ships the model-agnostic pieces of the CVODE-backed
+standalone simulator under `qsp_codegen/cpp/`:
+
+- `include/qsp_sim_core/CVODEBase.h`, `ParamBase.h`, `MolecularModelCVode.h`
+- `include/qsp_sim_core/model_hooks.h` — declares the `evolve_to_diagnosis`
+  override point used by the driver to set up a model-specific initial
+  state before the scenario sim.
+- `src/CVODEBase.cpp`, `ParamBase.cpp`, `default_hooks.cpp`
+- `src/qsp_sim_main.cpp` — the `qsp_sim` driver (CVODE stepping, YAML
+  scenario + drug-metadata parsing, segmented dose scheduling, CSV and
+  binary trajectory output, QSTH evolve-cache I/O).
+- `CMakeLists.txt`, `cmake/qsp_sim_coreConfig.cmake`, `cmake/QspSimCoreDeps.cmake`.
+
+Consumer `CMakeLists.txt` pulls this in via Python:
+
+```cmake
+execute_process(COMMAND python -m qsp_codegen.cmake --prefix
+                OUTPUT_VARIABLE QSP_SIM_CORE_PREFIX
+                OUTPUT_STRIP_TRAILING_WHITESPACE)
+list(APPEND CMAKE_PREFIX_PATH "${QSP_SIM_CORE_PREFIX}")
+find_package(qsp_sim_core CONFIG REQUIRED)
+
+add_executable(qsp_sim
+    ${QSP_SIM_CORE_DRIVER_SOURCE}
+    qsp/ode/ODE_system.cpp                 # emitted by qsp-codegen
+    qsp/ode/QSPParam.cpp                   # emitted by qsp-codegen
+    sim/evolve_to_diagnosis.cpp            # consumer override (optional)
+    sim/set_healthy_populations.cpp        # consumer-specific init
+)
+target_include_directories(qsp_sim PRIVATE qsp/ode sim)
+target_link_libraries(qsp_sim PRIVATE qsp_sim_core::qsp_sim_core)
+```
+
+### Model-init hook (`evolve_to_diagnosis`)
+
+Declared in `qsp_sim_core/model_hooks.h`:
+
+```cpp
+namespace CancerVCT {
+struct EvolveOpts   { std::string yaml_path; double time_factor; bool verbose; /* ... */ };
+struct EvolveResult { bool success; double t_diagnosis_days; double diameter_cm; std::string reject_reason; };
+EvolveResult evolve_to_diagnosis(ODE_system& ode, const EvolveOpts& opts);
+}
+```
+
+The driver calls this when `--evolve-to-diagnosis <yaml>` is passed on
+the command line. A default no-op implementation ships inside the
+`qsp_sim_core` static library and returns `{success=true, t_diag=0}`,
+so models without a pre-scenario evolve phase don't need to do
+anything. Models that do (e.g. evolve from healthy tissue until a
+tumor diameter is reached) define their own `evolve_to_diagnosis`
+in an object file compiled directly into the executable — the strong
+definition wins over the archive member at link time.
+
+The hook is a free function rather than a virtual on `ODE_system` so
+that qsp-codegen's emitted ABI stays untouched as the hook interface
+evolves.
