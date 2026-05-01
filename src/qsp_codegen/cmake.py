@@ -20,8 +20,35 @@ from pathlib import Path
 
 
 def cpp_root() -> Path:
-    """Return the directory holding CMakeLists.txt for qsp_sim_core."""
-    return Path(__file__).resolve().parent / "cpp"
+    """Return the directory holding CMakeLists.txt for qsp_sim_core.
+
+    Two layouts are supported:
+
+    1. **Wheel install** — ``cpp/`` is bundled into the package and lives
+       next to this file at ``src/qsp_codegen/cpp/``.
+    2. **Editable install (`pip install -e .`)** — the package's
+       ``__file__`` still resolves under ``src/qsp_codegen/``, but ``cpp/``
+       is at the repo root (sibling of ``src/``), so the wheel-style path
+       doesn't exist on disk.
+
+    Probe both. Wheel-style wins when it's present (the wheel bundles
+    ``cpp/`` so consumers get a hermetic install); the repo-root
+    fallback is only relevant for in-tree editable installs.
+    """
+    here = Path(__file__).resolve().parent
+    bundled = here / "cpp"
+    if bundled.exists():
+        return bundled
+    # Editable: src/qsp_codegen/cmake.py -> repo root is here.parents[1]
+    repo_cpp = here.parents[1] / "cpp"
+    if repo_cpp.exists():
+        return repo_cpp
+    raise FileNotFoundError(
+        f"qsp_codegen cpp/ tree not found. Looked at:\n"
+        f"  {bundled} (wheel layout)\n"
+        f"  {repo_cpp} (editable repo layout)\n"
+        "Reinstall qsp-codegen or check the package layout."
+    )
 
 
 def cmake_dir() -> Path:
