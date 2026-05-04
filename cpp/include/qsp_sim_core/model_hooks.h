@@ -19,6 +19,7 @@
 // every model-init design change.
 
 #include <string>
+#include <vector>
 
 namespace CancerVCT {
 
@@ -33,6 +34,22 @@ struct EvolveOpts {
     double tumor_cells = -1;
     double time_factor = 86400.0;   // 86400 (SI sec) or 1.0 (model-unit days)
     bool verbose = false;
+
+    // Optional: dump dense state during the burn-in phase. When
+    // ``trajectory_path`` is non-empty, the consumer's
+    // ``evolve_to_diagnosis`` implementation should open a binary v2
+    // file at this path (same magic 0x51535042 / VERSION 2 layout the
+    // post-scenario writer in qsp_sim_main produces) and append a row
+    // every ``trajectory_dt_days`` of model time. ``extra_comps`` /
+    // ``extra_rules`` carry the column layout (compartment volumes
+    // and assignment-rule values to track in addition to species),
+    // matching whatever the post-scenario CLI is configured to write
+    // so downstream readers can use one schema. Use 0.0 for
+    // ``trajectory_dt_days`` to fall back to the spec's step_days.
+    std::string trajectory_path;
+    double trajectory_dt_days = 0.0;
+    std::vector<std::string> trajectory_extra_comps;
+    std::vector<std::string> trajectory_extra_rules;
 };
 
 struct EvolveResult {
