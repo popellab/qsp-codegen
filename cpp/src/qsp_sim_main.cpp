@@ -97,6 +97,18 @@ struct Args {
                                    // dumped-state headers; verified against
                                    // --initial-state headers. Catches
                                    // cache/theta mismatches.
+    std::string evolve_trajectory_out;  // --evolve-trajectory-out <path>:
+                                        // dump dense state during burn-in
+                                        // to a binary v2 file (same magic
+                                        // 0x51535042 layout as --binary-out
+                                        // post-scenario output). Time
+                                        // axis is model-time days from
+                                        // start of evolve (t=0 row is
+                                        // healthy IC). Requires
+                                        // --evolve-to-diagnosis.
+    double evolve_trajectory_dt_days = 0.0;  // --evolve-trajectory-dt-days N:
+                                             // dump every N model-time days.
+                                             // 0 = use spec's step_days.
     double t_end_days = 365.0;
     double dt_days = 0.1;
 };
@@ -135,6 +147,16 @@ void print_usage(const char* prog) {
         << "                          read from the blob header.\n"
         << "  --params-hash   <hex>   stored in dumps, verified on loads (catches\n"
         << "                          cache/theta mismatches).\n"
+        << "\n"
+        << "Burn-in trajectory dump:\n"
+        << "  --evolve-trajectory-out      <path>  with --evolve-to-diagnosis: dump dense\n"
+        << "                                       state during burn-in to a binary v2\n"
+        << "                                       file (same layout as --binary-out).\n"
+        << "                                       Time axis: model-time days from start\n"
+        << "                                       of evolve (t=0 row = healthy IC;\n"
+        << "                                       last row = at-diagnosis state).\n"
+        << "  --evolve-trajectory-dt-days  <N>     dump every N days of model time\n"
+        << "                                       (default 0 = use evolve spec step_days).\n"
         << "\n"
         << "Legacy: " << prog
         << " <param_xml> <csv_out> [t_end_days] [dt_days]\n";
@@ -202,6 +224,12 @@ bool parse_args(int argc, char* argv[], Args& out) {
         } else if (a == "--params-hash") {
             const char* v = need_val("--params-hash"); if (!v) return false;
             out.params_hash = v;
+        } else if (a == "--evolve-trajectory-out") {
+            const char* v = need_val("--evolve-trajectory-out"); if (!v) return false;
+            out.evolve_trajectory_out = v;
+        } else if (a == "--evolve-trajectory-dt-days") {
+            const char* v = need_val("--evolve-trajectory-dt-days"); if (!v) return false;
+            out.evolve_trajectory_dt_days = std::stod(v);
         } else if (a == "-h" || a == "--help") {
             return false;
         } else {
@@ -237,6 +265,11 @@ bool parse_args(int argc, char* argv[], Args& out) {
     }
     if (!out.initial_state_path.empty() && !out.dump_state_path.empty()) {
         std::cerr << "--initial-state and --dump-state are mutually exclusive"
+                  << std::endl;
+        return false;
+    }
+    if (!out.evolve_trajectory_out.empty() && out.healthy_yaml.empty()) {
+        std::cerr << "--evolve-trajectory-out requires --evolve-to-diagnosis"
                   << std::endl;
         return false;
     }
@@ -586,6 +619,13 @@ int main(int argc, char* argv[]) {
         eo.yaml_path = args.healthy_yaml;
         eo.time_factor = time_factor;
         eo.verbose = true;
+        // Burn-in trajectory dump: same v2 binary format as --binary-out.
+        // Reuse the same compartment/rule layout the post-scenario writer
+        // emits so downstream readers can use one schema for both phases.
+        eo.trajectory_path = args.evolve_trajectory_out;
+        eo.trajectory_dt_days = args.evolve_trajectory_dt_days;
+        eo.trajectory_extra_comps = extra_comps;
+        eo.trajectory_extra_rules = extra_rules;
         EvolveResult er = evolve_to_diagnosis(ode, eo);
         if (!er.success) {
             std::cerr << "evolve_to_diagnosis REJECTED: "
