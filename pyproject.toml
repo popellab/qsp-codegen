@@ -9,7 +9,10 @@ description = "SBML → C++ CVODE ODE code generator for QSP models."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
-authors = [{ name = "Joel Eliason", email = "jeliaso2@jh.edu" }]
+authors = [
+    { name = "Joel Eliason", email = "jeliaso2@jh.edu" },
+    { name = "Aleksander S. Popel" },
+]
 dependencies = [
     "sympy>=1.11",
     "numpy>=1.22",
