@@ -20,6 +20,7 @@ repository-code: "https://github.com/popellab/qsp-codegen"
 license: MIT
 version: 0.1.0
 date-released: 2026-05-06
+doi: "10.5281/zenodo.20059614"
 keywords:
   - quantitative-systems-pharmacology
   - sbml
