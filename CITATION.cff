@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "qsp-codegen"
+abstract: "SBML to C++ CVODE ODE code generator for quantitative systems pharmacology (QSP) models."
+authors:
+  - family-names: Eliason
+    given-names: Joel
+    email: jeliaso2@jh.edu
+    orcid: "https://orcid.org/0000-0003-2227-8727"
+    affiliation: "Johns Hopkins University, Department of Biomedical Engineering"
+  - family-names: Christenson
+    given-names: Chase
+    email: cchris80@jh.edu
+    affiliation: "Johns Hopkins University, Department of Biomedical Engineering"
+  - family-names: Popel
+    given-names: Aleksander S.
+    affiliation: "Johns Hopkins University, Department of Biomedical Engineering"
+repository-code: "https://github.com/popellab/qsp-codegen"
+license: MIT
+version: 0.1.0
+date-released: 2026-05-06
+keywords:
+  - quantitative-systems-pharmacology
+  - sbml
+  - code-generation
+  - ode-solvers
+  - cvode
