@@ -48,12 +48,11 @@ struct EvolveOpts {
     //
     // Format note: as of qsp-codegen's v3 schema bump, the post-
     // scenario writer emits an 80-byte header with per-row time and
-    // n_cvode_steps fields. The burn-in dump format is consumer-
-    // defined; the recommended path is to match v3 byte-for-byte so
-    // qsp-hpc-tools' single reader applies to both phases. Consumers
-    // that haven't migrated yet can keep emitting v2 (56-byte header,
-    // no time column, fixed dt grid) — readers must accept both
-    // versions during the transition.
+    // n_cvode_steps fields. Consumer burn-in writers MUST match v3
+    // byte-for-byte — qsp-hpc-tools dropped v2 reader support in the
+    // same coordinated cutover (no version fallback). Update your
+    // evolve_to_diagnosis hook to write v3 (per-row time column;
+    // 80-byte header) before bumping qsp-codegen past this commit.
     std::string trajectory_path;
     double trajectory_dt_days = 0.0;
     std::vector<std::string> trajectory_extra_comps;
