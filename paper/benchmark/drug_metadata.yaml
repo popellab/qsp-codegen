@@ -1,0 +1,10 @@
+# Drug metadata for the benchmark scenario. `direct` dose basis means the
+# `Drug_dose` value in scenario.yaml is added in `units` directly to the
+# named target species (no per-weight or per-BSA scaling).
+drugs:
+  Drug:
+    units: mole
+    dose_basis: direct
+    targets:
+      - species: c1.Drug
+        fraction: 1.0

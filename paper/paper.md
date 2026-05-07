@@ -27,24 +27,35 @@ bibliography: paper.bib
 
 Quantitative systems pharmacology (QSP) models are mechanistic, ordinary differential equation (ODE)-based representations of disease biology and drug action used throughout pharmaceutical development [@Gadkar2016; @Allen2016; @Craig2023]. They are most often constructed in MATLAB's SimBiology, which provides a graphical and SBML-compatible authoring environment but a stiff, MATLAB-bound integrator that becomes a bottleneck when models are exercised in modern inference pipelines such as simulation-based inference (SBI) [@Cranmer2020; @Goncalves2020].
 
-`qsp-codegen` is a Python package that takes a SimBiology-exported SBML Level 2 Version 4 file and emits a complete set of C++ sources for a CVODE-backed standalone simulator [@Hindmarsh2005]. The emitted code, together with a small bundled C++ runtime (`qsp_sim_core`) that the wheel ships and exposes through a CMake package, compiles into a `qsp_sim` executable that integrates the model orders of magnitude faster than the original SimBiology workflow while preserving the model's species, parameters, reactions, and initial state.
+`qsp-codegen` is a Python package that takes a SimBiology-exported SBML Level 2 Version 4 file and emits a complete set of C++ sources for a CVODE-backed standalone simulator [@Hindmarsh2005]. The emitted code, together with a small bundled C++ runtime (`qsp_sim_core`) that the wheel ships and exposes through a CMake package, compiles into a `qsp_sim` executable that preserves the model's species, parameters, reactions, and initial state and substantially reduces per-call simulation cost relative to the original SimBiology workflow (see the benchmark below).
 
 # Statement of need
 
 SBML offers a portable specification for systems biology ODE models, and several mature tools generate executable code from SBML, including AMICI [@Frohlich2021], libRoadRunner [@Somogyi2015], SBMLtoODEpy [@Ruggiero2019], and COPASI [@Hoops2006]. These tools are excellent general-purpose simulators, but QSP applications place a few specific demands that motivate a smaller, focused code generator:
 
-1. **SimBiology-exported SBML quirks.** Production QSP models frequently use SimBiology-specific patterns (e.g., `repeatedAssignment` rules, particular unit annotations) that not every general SBML toolchain handles cleanly. `qsp-codegen` is written against the SBML dialect that SimBiology actually emits.
-2. **Tight coupling to a hand-written C++ driver.** QSP simulations typically include model-specific machinery that lives outside the ODE itself: scenario-aware dosing schedules, a pre-treatment burn-in phase that evolves the patient until a diagnostic event, and consumer-specific initial-condition setup. These are awkward to express through a general-purpose simulator's API but natural in a thin C++ driver. `qsp-codegen` is designed to plug into such a driver via a stable hook interface (`evolve_to_diagnosis`, declared in `qsp_sim_core/model_hooks.h`) rather than around it.
-3. **ABI stability for iterative inference workflows.** When QSP models are coupled to neural posterior estimation or other SBI methods, the simulator is rebuilt and called millions of times across model iterations. Keeping the generated ABI minimal and predictable (one `ODE_system` class plus a parameter container) lets consumer build systems cache aggressively and avoid spurious recompilation.
-4. **Optional dependency footprint.** General SBML simulators bring substantial dependency stacks. `qsp-codegen` requires only `sympy` and `numpy` at code-generation time; the runtime needs only CVODE.
+1. **SimBiology-exported SBML quirks.** Production QSP models frequently rely on patterns that are idiomatic in SimBiology but awkward for general SBML toolchains: dotted `Compartment.Species` identifiers, MathML where `max`/`min` are emitted as `<ci>max</ci>` identifier nodes rather than the standard `<max/>` operator, and `initialAssignment` rules that override XML `initialAmount`/`initialConcentration` values and must be evaluated in concentration space before being converted back to amounts for the integrator. `qsp-codegen` is written against the SBML dialect that SimBiology actually emits and normalizes these constructs explicitly.
+2. **Optional dependency footprint.** General SBML simulators bring substantial dependency stacks. `qsp-codegen` requires only `sympy` and `numpy` at code-generation time; the runtime needs only CVODE.
+3. **Burn-in state reuse across parameter sweeps.** A common QSP workflow is to evolve a baseline (e.g., healthy tissue) until a diagnostic event, then run many treatment scenarios from that state for the same parameter vector. The bundled runtime serializes the post-burn-in CVODE integrator state to a small parameter-hashed binary cache, so the burn-in is paid once per parameter vector rather than once per scenario. General SBML simulators expose pre-equilibration or steady-state routines but not a portable checkpoint that can be reused across processes and HPC jobs.
+4. **Reproducibility and distribution of QSP simulators.** SimBiology is the standard authoring environment for QSP models but is not always the most convenient deployment target — open-source CI, reviewers attempting to reproduce results, and downstream researchers using a different toolchain all benefit from a self-contained build that can be exercised independently of the authoring environment. `qsp-codegen`'s output is plain C++ depending only on CVODE, so a model authored interactively in SimBiology can be distributed as an executable that any collaborator can build and run.
+5. **Embeddability inside larger C++ codebases.** The generated `ODE_system` is a plain C++ class with a small header surface, and `qsp_sim_core` links statically against CVODE alone — no Python interpreter and no LLVM JIT in the dependency closure. This makes the QSP submodel cheap to drop into larger simulators that consume it as a component rather than as a separate process. The codegen and runtime in this package were in fact extracted from the SPQSP_PDAC GPU agent-based model [@spqsp_pdac], where a host-side `MolecularModelCVode<ODE_system>` integrates the lymph-central QSP submodel and exchanges state each step with a FLAME GPU 2 cell-level ABM; the shape of the emitted class and the static-only runtime is set by that embedded use case rather than designed speculatively. By contrast, libRoadRunner ships an LLVM JIT for runtime model loading, and AMICI's generated module is wired to its own Solver/Model/ReturnData runtime designed for Python-driven parameter sweeps.
 
-`qsp-codegen` is not a competitor to AMICI or libRoadRunner for general systems-biology workflows. It occupies a narrower niche: it is the SBML-to-simulator step inside a QSP-specific stack that includes the `qsp-hpc-tools` HPC orchestration layer [@qsp_hpc_tools] and downstream Bayesian inference. It is currently used in production for a pancreatic cancer QSP model, where the generated C++ simulator yields per-call speedups of roughly 25-87 times over the equivalent SimBiology integration on representative parameter sets, closing the gap that previously made full SBI workflows impractical in this setting.
+`qsp-codegen` is not a competitor to AMICI or libRoadRunner for general systems-biology workflows. It occupies a narrower niche: it is the SBML-to-simulator step inside a QSP-specific stack that includes the `qsp-hpc-tools` HPC orchestration layer [@qsp_hpc_tools] and downstream Bayesian inference.
+
+The reproducible benchmark in `paper/benchmark/` exports a 25-compartment, 73-reaction model from SimBiology and runs it under both backends with matched SUNDIALS tolerances (`reltol=1e-6`, `abstol=1e-9`) over a 365-day horizon. Trajectories are checked for agreement (worst per-species relative error 1%) before timings are reported. Three regimes are shown (medians of 30 repetitions; cold-start medians of 3, p25–p75 in parentheses):
+
+| Mode | MATLAB SimBiology (s) | qsp-codegen / CVODE (s) | Speedup |
+|---|---|---|---|
+| Integration only, no dosing | 0.011 (0.011–0.012) | 0.0058 (0.0056–0.0059) | 2.0× |
+| Integration only, 6-bolus schedule | 0.017 (0.016–0.018) | 0.0069 (0.0067–0.0074) | 2.5× |
+| Wall-clock per invocation, no dosing | 8.271 (8.251–8.358) | 0.0084 (0.0083–0.0100) | ≈980× |
+
+The integration-only regime isolates ODE-solver work; both engines run CVODE with matched tolerances, so the ~2× advantage at this size reflects per-call effects we did not decompose — likely some combination of compiled C++ versus accelerator-JIT'd MATLAB right-hand-side dispatch, analytical versus finite-difference Jacobian, and state-vector marshalling overhead — that we expect to grow with model size and stiffness. The wall-clock regime is what an SBI workflow pays per call when not using a persistent MATLAB worker pool — MATLAB's process startup dominates and the C++ binary's near-zero startup turns into a three-orders-of-magnitude end-to-end gap.
 
 # Design and key features
 
 ## Code generation
 
-`qsp-codegen` parses the input SBML file with `libsbml`, normalizes SimBiology-specific constructs (assignment rules, repeated assignments, unit factors, conserved moiety patterns), and emits:
+`qsp-codegen` parses the input SBML file with `libsbml`, normalizes SimBiology-specific constructs (assignment rules, repeated assignments, and unit-factor conversions), and emits:
 
 - `QSP_enum.h`: a strongly-typed enum of state variables and parameters.
 - `ODE_system.h`, `ODE_system.cpp`: the ODE right-hand side and a CVODE-compatible Jacobian.
@@ -64,7 +75,7 @@ The wheel ships a model-agnostic C++ runtime that consumer projects pull in via 
 
 ## Parity harness
 
-`qsp-codegen` ships a parity harness in `qsp_codegen.parity` that runs a SimBiology trajectory export side-by-side against the C++ simulator over a user-supplied parameter sweep and reports per-species relative error. This makes regressions in the code generator easy to detect when SimBiology models are revised.
+`qsp-codegen` ships a parity harness in `qsp_codegen.parity` that runs a SimBiology trajectory export side-by-side against the C++ simulator and reports per-species relative error. This makes regressions in the code generator easy to detect when SimBiology models are revised.
 
 # Typical usage
 
@@ -81,6 +92,6 @@ The emitted sources, plus the `qsp_sim_core` runtime located via CMake, build a 
 
 # Acknowledgements
 
-This work was supported by the National Institutes of Health. The authors thank the Maryland Advanced Research Computing Center (MARCC) for HPC resources used to validate the generated simulator at scale.
+This work was supported by the National Institutes of Health and the Lustgarten Foundation. The authors thank the Maryland Advanced Research Computing Center (MARCC) for HPC resources used to validate the generated simulator at scale.
 
 # References
