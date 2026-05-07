@@ -37,15 +37,23 @@ struct EvolveOpts {
 
     // Optional: dump dense state during the burn-in phase. When
     // ``trajectory_path`` is non-empty, the consumer's
-    // ``evolve_to_diagnosis`` implementation should open a binary v2
-    // file at this path (same magic 0x51535042 / VERSION 2 layout the
-    // post-scenario writer in qsp_sim_main produces) and append a row
+    // ``evolve_to_diagnosis`` implementation should open a binary file
+    // at this path with magic 0x51535042 ("QSPB") and append a row
     // every ``trajectory_dt_days`` of model time. ``extra_comps`` /
     // ``extra_rules`` carry the column layout (compartment volumes
     // and assignment-rule values to track in addition to species),
     // matching whatever the post-scenario CLI is configured to write
     // so downstream readers can use one schema. Use 0.0 for
     // ``trajectory_dt_days`` to fall back to the spec's step_days.
+    //
+    // Format note: as of qsp-codegen's v3 schema bump, the post-
+    // scenario writer emits an 80-byte header with per-row time and
+    // n_cvode_steps fields. The burn-in dump format is consumer-
+    // defined; the recommended path is to match v3 byte-for-byte so
+    // qsp-hpc-tools' single reader applies to both phases. Consumers
+    // that haven't migrated yet can keep emitting v2 (56-byte header,
+    // no time column, fixed dt grid) — readers must accept both
+    // versions during the transition.
     std::string trajectory_path;
     double trajectory_dt_days = 0.0;
     std::vector<std::string> trajectory_extra_comps;

@@ -14,7 +14,7 @@ typical shape:
         param_xml=Path("resources/cpp/param_all.xml"),
         out_csv=tmp_path / "cpp.csv",
         t_end_days=365,
-        dt_days=0.1,
+        min_cadence_hours=4.0,
     )
 
     # Scenario parity with dosing + evolve_to_diagnosis on both sides:
@@ -23,7 +23,7 @@ typical shape:
         param_xml=Path("resources/cpp/param_all.xml"),
         out_csv=tmp_path / "cpp.csv",
         t_end_days=30,
-        dt_days=0.1,
+        min_cadence_hours=4.0,
         scenario_yaml=Path("scenarios/gvax_nivo_neoadjuvant.yaml"),
         drug_metadata_yaml=Path("resources/cpp/drug_metadata.yaml"),
         evolve_to_diagnosis_yaml=Path("resources/cpp/healthy_state.yaml"),
@@ -71,7 +71,7 @@ def run_cpp_trajectories(
     param_xml: Path,
     out_csv: Path,
     t_end_days: float,
-    dt_days: float,
+    min_cadence_hours: float = 4.0,
     scenario_yaml: Optional[Path] = None,
     drug_metadata_yaml: Optional[Path] = None,
     evolve_to_diagnosis_yaml: Optional[Path] = None,
@@ -79,7 +79,12 @@ def run_cpp_trajectories(
 ) -> Path:
     """Run the compiled ``qsp_sim`` binary and return the output CSV path.
 
-    Positional args always sent: ``<param_xml> <csv_out> <t_end> <dt>``.
+    Positional args always sent: ``<param_xml> <csv_out> <t_end>
+    <min_cadence_hours>``. The four positional args mirror the binary's
+    legacy form; ``--dt-days`` was removed in qsp-codegen's v3 schema bump
+    and ``min_cadence_hours`` (upper bound on inter-row spacing under the
+    new CV_ONE_STEP cadence floor) takes its place.
+
     The three optional kwargs each map to a long flag on ``qsp_sim``:
 
     - ``scenario_yaml`` → ``--scenario``: apply the dosing schedule /
@@ -114,7 +119,7 @@ def run_cpp_trajectories(
             raise FileNotFoundError(f"{kwarg_name} not found: {p}")
 
     argv = [str(qsp_sim), str(param_xml), str(out_csv),
-            str(t_end_days), str(dt_days)]
+            str(t_end_days), str(min_cadence_hours)]
     if scenario_yaml is not None:
         argv.extend(["--scenario", str(scenario_yaml)])
     if drug_metadata_yaml is not None:

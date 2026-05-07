@@ -59,6 +59,21 @@ public:
 	//! delayed-execution discontinuities — use simOdeStep for those.
 	void simOdeSample(double tEnd);
 
+	//! Take a single internal CVODE step in CV_ONE_STEP mode and return the
+	//! resulting integration time. Used by output loops that want to dump
+	//! state at solver-native cadence (subject to a cadence floor) instead
+	//! of forcing a fixed output grid. Like simOdeSample, this does NOT
+	//! reinitialize CVODE — the caller is expected to have run
+	//! setupSamplingRun(t_end_of_sim) once beforehand. The CVODE stop time
+	//! pinned by setupSamplingRun bounds how far one step can advance, so
+	//! `tEndClamp` only fixes the integration direction (must be > current
+	//! solver time). Returns the new solver time after the step.
+	double simOdeStepOne(double tEndClamp);
+
+	//! Total CVODE internal steps taken since the last setupSamplingRun
+	//! / resetSolver. Wraps CVodeGetNumSteps for instrumentation.
+	long getNumSteps() const;
+
 	//! One-time setup before the first simOdeSample call: sets the CVODE
 	//! stop time to t_end_of_sim so CV_NORMAL stepping won't walk past it,
 	//! and runs any pending initial-assignment events at t0.
