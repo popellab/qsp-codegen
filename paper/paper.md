@@ -10,11 +10,13 @@ tags:
   - ODE solvers
 authors:
   - name: Chase Christenson
+    orcid: 0000-0000-0000-0000  # TODO: fill in before submission
     affiliation: 1
   - name: Joel Eliason
     orcid: 0000-0003-2227-8727
     affiliation: 1
   - name: Aleksander S. Popel
+    orcid: 0000-0000-0000-0000  # TODO: fill in before submission
     affiliation: 1
 affiliations:
   - name: Department of Biomedical Engineering, Johns Hopkins University, Baltimore, MD, USA
@@ -37,7 +39,7 @@ SBML offers a portable specification for systems biology ODE models, and several
 2. **Optional dependency footprint.** General SBML simulators bring substantial dependency stacks. `qsp-codegen` requires only `sympy` and `numpy` at code-generation time; the runtime needs only CVODE.
 3. **Burn-in state reuse across parameter sweeps.** A common QSP workflow is to evolve a baseline (e.g., healthy tissue) until a diagnostic event, then run many treatment scenarios from that state for the same parameter vector. The bundled runtime serializes the post-burn-in CVODE integrator state to a small parameter-hashed binary cache, so the burn-in is paid once per parameter vector rather than once per scenario. General SBML simulators expose pre-equilibration or steady-state routines but not a portable checkpoint that can be reused across processes and HPC jobs.
 4. **Reproducibility and distribution of QSP simulators.** SimBiology is the standard authoring environment for QSP models but is not always the most convenient deployment target — open-source CI, reviewers attempting to reproduce results, and downstream researchers using a different toolchain all benefit from a self-contained build that can be exercised independently of the authoring environment. `qsp-codegen`'s output is plain C++ depending only on CVODE, so a model authored interactively in SimBiology can be distributed as an executable that any collaborator can build and run.
-5. **Embeddability inside larger C++ codebases.** The generated `ODE_system` is a plain C++ class with a small header surface, and `qsp_sim_core` links statically against CVODE alone — no Python interpreter and no LLVM JIT in the dependency closure. This makes the QSP submodel cheap to drop into larger simulators that consume it as a component rather than as a separate process. The codegen and runtime in this package were in fact extracted from the SPQSP_PDAC GPU agent-based model [@spqsp_pdac], where a host-side `MolecularModelCVode<ODE_system>` integrates the lymph-central QSP submodel and exchanges state each step with a FLAME GPU 2 cell-level ABM; the shape of the emitted class and the static-only runtime is set by that embedded use case rather than designed speculatively. By contrast, libRoadRunner ships an LLVM JIT for runtime model loading, and AMICI's generated module is wired to its own Solver/Model/ReturnData runtime designed for Python-driven parameter sweeps.
+5. **Embeddability inside larger C++ codebases.** The generated `ODE_system` is a plain C++ class with a small header surface, and `qsp_sim_core` links statically against CVODE alone — no Python interpreter and no LLVM JIT in the dependency closure. The codegen and runtime in this package were extracted from the SPQSP_PDAC GPU agent-based model [@spqsp_pdac], where a host-side `MolecularModelCVode<ODE_system>` integrates a lymph-central QSP submodel coupled each step to a FLAME GPU 2 cell-level ABM; the emitted class shape is set by that embedded use case. libRoadRunner and AMICI both bring substantially heavier runtimes (LLVM JIT and a Python-oriented Solver/Model/ReturnData stack respectively) that are awkward to drop into a C++-native consumer.
 
 `qsp-codegen` is not a competitor to AMICI or libRoadRunner for general systems-biology workflows. It occupies a narrower niche: it is the SBML-to-simulator step inside a QSP-specific stack that includes the `qsp-hpc-tools` HPC orchestration layer [@qsp_hpc_tools] and downstream Bayesian inference.
 
@@ -49,7 +51,7 @@ The reproducible benchmark in `paper/benchmark/` exports a 25-compartment, 73-re
 | Integration only, 6-bolus schedule | 0.017 (0.016–0.018) | 0.0069 (0.0067–0.0074) | 2.5× |
 | Wall-clock per invocation, no dosing | 8.271 (8.251–8.358) | 0.0084 (0.0083–0.0100) | ≈980× |
 
-The integration-only regime isolates ODE-solver work; both engines run CVODE with matched tolerances, so the ~2× advantage at this size reflects per-call effects we did not decompose — likely some combination of compiled C++ versus accelerator-JIT'd MATLAB right-hand-side dispatch, analytical versus finite-difference Jacobian, and state-vector marshalling overhead — that we expect to grow with model size and stiffness. The wall-clock regime is what an SBI workflow pays per call when not using a persistent MATLAB worker pool — MATLAB's process startup dominates and the C++ binary's near-zero startup turns into a three-orders-of-magnitude end-to-end gap.
+The integration-only regime isolates ODE-solver work; both engines run CVODE with matched tolerances, so the ~2× advantage at this size reflects per-call effects we did not decompose (compiled vs. accelerator-JIT'd RHS dispatch, analytical vs. finite-difference Jacobian, state-vector marshalling) and is expected to grow with model size and stiffness. The wall-clock regime is what an SBI workflow pays per call when not using a persistent MATLAB worker pool — MATLAB's process startup dominates and the gap stretches to three orders of magnitude end-to-end.
 
 # Design and key features
 
