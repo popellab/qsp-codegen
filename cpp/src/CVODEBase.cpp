@@ -567,6 +567,39 @@ void CVODEBase::simOdeSample(double tEnd){
 	save_y();
 	update_y_other();
 }
+
+/*! Advance CVODE by one internal step (CV_ONE_STEP) and return the resulting
+	integration time. Used by output loops that prefer solver-native cadence
+	to a fixed output grid: the caller dumps a row whenever t advances past a
+	configurable minimum cadence and at the simulation stop time. CVODE's
+	stop time is pinned by the prior setupSamplingRun call, so the step won't
+	walk past tEndOfSim regardless of `tEndClamp` (which CV_ONE_STEP uses only
+	to determine integration direction).
+*/
+double CVODEBase::simOdeStepOne(double tEndClamp){
+	realtype t_ret = tEndClamp;
+	int flag = CVode(_cvode_mem, tEndClamp, _y, &t_ret, CV_ONE_STEP);
+	if (flag != CV_TOO_CLOSE) {
+		check_flag(&flag, "CVode", 1);
+	}
+	save_y();
+	update_y_other();
+	return static_cast<double>(t_ret);
+}
+
+/*! Wrapper over CVodeGetNumSteps. Returns 0 on failure. The counter is reset
+	by CVodeReInit (so by setupSamplingRun and resetSolver), making it usable
+	for per-segment step instrumentation if the caller queries before each
+	re-init. Accumulating across segments is the caller's responsibility.
+*/
+long CVODEBase::getNumSteps() const {
+	long n_steps = 0;
+	int flag = CVodeGetNumSteps(_cvode_mem, &n_steps);
+	if (flag != CV_SUCCESS) {
+		return 0;
+	}
+	return n_steps;
+}
 // ----- Evolve-cache full-state serialization -----------------------------
 //
 // Pure data dump: ODE_system state vectors + delay-event queue + trigger

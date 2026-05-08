@@ -50,13 +50,22 @@ def compare(matlab_csv, cpp_csv, rtol=1e-3, atol=1e-9):
         lines.append("ERROR: No species matched between files!")
         return False, "\n".join(lines)
 
-    t_common = np.intersect1d(np.round(t_m, 6), np.round(t_c, 6))
+    # The C++ side runs CV_ONE_STEP with a min-cadence floor (qsp-codegen
+    # v3 schema), so its sample times are non-uniform and don't line up
+    # with MATLAB's fixed-grid output. Compare on MATLAB's grid using
+    # linear interpolation of each C++ species column. Restrict to MATLAB
+    # times within the C++ trajectory's span to avoid extrapolation.
+    t_lo = max(t_m.min(), t_c.min())
+    t_hi = min(t_m.max(), t_c.max())
+    mask = (t_m >= t_lo) & (t_m <= t_hi)
+    t_common = t_m[mask]
     if len(t_common) == 0:
-        t_common = t_c
-        lines.append(
-            f"No exact time matches; interpolating MATLAB to C++ times "
-            f"({len(t_common)} points)"
-        )
+        lines.append("ERROR: MATLAB and C++ time spans do not overlap.")
+        return False, "\n".join(lines)
+    lines.append(
+        f"Comparing on MATLAB grid (linear-interp C++ → MATLAB times, "
+        f"{len(t_common)} points in [{t_lo:.3f}, {t_hi:.3f}])"
+    )
 
     n_fail = 0
     max_rdiff = 0.0
@@ -64,28 +73,31 @@ def compare(matlab_csv, cpp_csv, rtol=1e-3, atol=1e-9):
     worst_time = 0.0
 
     for name, mi, ci in common:
-        for ti, t in enumerate(t_common):
-            mi_t = np.argmin(np.abs(t_m - t))
-            ci_t = np.argmin(np.abs(t_c - t))
+        vm_col = v_m[mask, mi]
+        vc_col = np.interp(t_common, t_c, v_c[:, ci])
 
-            vm = v_m[mi_t, mi]
-            vc = v_c[ci_t, ci]
+        denom = np.maximum.reduce(
+            [np.abs(vm_col), np.abs(vc_col), np.full_like(vm_col, atol)]
+        )
+        rdiff = np.abs(vm_col - vc_col) / denom
 
-            denom = max(abs(vm), abs(vc), atol)
-            rdiff = abs(vm - vc) / denom
+        # Track worst across all timepoints for this species.
+        worst_idx = int(np.argmax(rdiff))
+        if rdiff[worst_idx] > max_rdiff:
+            max_rdiff = float(rdiff[worst_idx])
+            worst_species = name
+            worst_time = float(t_common[worst_idx])
 
-            if rdiff > max_rdiff:
-                max_rdiff = rdiff
-                worst_species = name
-                worst_time = t
-
-            if rdiff > rtol and abs(vm - vc) > atol:
-                n_fail += 1
-                if n_fail <= 10:
-                    lines.append(
-                        f"  FAIL: {name} at t={t:.2f}: "
-                        f"MATLAB={vm:.6e}, C++={vc:.6e}, rdiff={rdiff:.2e}"
-                    )
+        # Flag any timepoint exceeding both rtol and atol budgets.
+        fail_mask = (rdiff > rtol) & (np.abs(vm_col - vc_col) > atol)
+        n_fail += int(fail_mask.sum())
+        for fi in np.where(fail_mask)[0][: max(0, 10 - n_fail + int(fail_mask.sum()))]:
+            t = float(t_common[fi])
+            lines.append(
+                f"  FAIL: {name} at t={t:.2f}: "
+                f"MATLAB={vm_col[fi]:.6e}, C++={vc_col[fi]:.6e}, "
+                f"rdiff={rdiff[fi]:.2e}"
+            )
 
     total_comparisons = len(common) * len(t_common)
     lines.append(f"Comparisons: {total_comparisons}")

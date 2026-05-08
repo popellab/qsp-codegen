@@ -9,33 +9,41 @@
  *   - Raw binary (compact, fast to parse from Python). Used for parameter
  *     sweeps where CSV parse overhead dominates wall time.
  *
- * Binary format (little-endian, packed, no padding):
- *   uint32  magic    = 0x51535042          // "QSPB"
- *   uint32  version  = 1
- *   uint64  n_times                         // number of time rows (incl. t=0)
- *   uint64  n_species                       // columns per row
- *   float64 dt_days
- *   float64 t_end_days
- *   float64 data[n_times * n_species]       // row-major; row = timepoint
+ * Binary format v3 (little-endian, packed, no padding; 80-byte header):
+ *   uint32  magic              = 0x51535042   // "QSPB"
+ *   uint32  version            = 3
+ *   uint64  n_times                            // number of time rows (incl. t=0)
+ *   uint64  n_species                          // species cols per row
+ *   uint64  n_compartments                     // compartment cols per row
+ *   uint64  n_rules                            // assignment-rule cols per row
+ *   float64 min_cadence_hours                  // upper bound on inter-row spacing
+ *   float64 t_end_days                         // simulation stop time (user-relative)
+ *   float64 t_offset_days                      // diagnosis offset (0 if no evolve)
+ *   uint64  n_cvode_steps                      // total CVODE internal steps
+ *   uint64  reserved          = 0              // forward compat
+ *   float64 data[n_times * (1 + n_species + n_compartments + n_rules)]
  *
- * Time column is NOT stored — it is reconstructible as i*dt for i in
- * [0, n_times), with the final row being t_end_days (possibly clipped).
+ * Each row begins with a `time` column (user-relative days). Unlike v2's
+ * fixed-grid layout, sample times are non-uniform: CVODE runs in CV_ONE_STEP
+ * mode and a row is emitted whenever the elapsed time since the last dump
+ * exceeds `min_cadence_hours`, plus at every dose boundary and at t_end. The
+ * cadence floor caps the worst-case row count during stiff transients while
+ * letting the solver coarsen during steady-state.
  *
  * Usage:
  *   qsp_sim --param <xml> [--csv-out <path>] [--binary-out <path>]
- *           [--species-out <path>] [--t-end-days N] [--dt-days N]
+ *           [--species-out <path>] [--t-end-days N] [--min-cadence-hours N]
  *           [--scenario <scenario.yaml> --drug-metadata <drug_meta.yaml>]
  *
  * With --scenario, doses declared in the scenario YAML are applied as boluses
  * to their target species at exactly their dose times. The solver uses a
- * segmented sampling path: simOdeSample runs between dose boundaries
+ * segmented sampling path: simOdeStepOne runs between dose boundaries
  * (Nordsieck history preserved, ~5-10x faster than per-step reinit) and
  * setupSamplingRun re-inits CVODE only at dose times. With no doses the
- * segmented loop collapses to a single segment identical to the plain
- * fast-sampling path.
+ * segmented loop collapses to a single segment.
  *
  * Legacy positional form (kept for back-compat with existing tests):
- *   qsp_sim <param_xml> <csv_out> [t_end_days] [dt_days]
+ *   qsp_sim <param_xml> <csv_out> [t_end_days] [min_cadence_hours]
  */
 #include <algorithm>
 #include <cstdint>
@@ -99,18 +107,28 @@ struct Args {
                                    // cache/theta mismatches.
     std::string evolve_trajectory_out;  // --evolve-trajectory-out <path>:
                                         // dump dense state during burn-in
-                                        // to a binary v2 file (same magic
-                                        // 0x51535042 layout as --binary-out
-                                        // post-scenario output). Time
-                                        // axis is model-time days from
-                                        // start of evolve (t=0 row is
-                                        // healthy IC). Requires
-                                        // --evolve-to-diagnosis.
+                                        // to a binary file (magic
+                                        // 0x51535042 / "QSPB"). Format
+                                        // is consumer-defined by the
+                                        // evolve_to_diagnosis hook; v2
+                                        // and v3 readers must coexist
+                                        // during the transition (see
+                                        // model_hooks.h). Time axis is
+                                        // model-time days from start of
+                                        // evolve (t=0 row = healthy IC).
+                                        // Requires --evolve-to-diagnosis.
     double evolve_trajectory_dt_days = 0.0;  // --evolve-trajectory-dt-days N:
                                              // dump every N model-time days.
                                              // 0 = use spec's step_days.
     double t_end_days = 365.0;
-    double dt_days = 0.1;
+    // Upper bound on output-row spacing. CVODE runs CV_ONE_STEP and
+    // emits a sample whenever the elapsed solver time since the last
+    // emit exceeds this floor (plus at dose boundaries and t_end). 4 h
+    // matches the scenario default in the trajectory pipeline (D4 in
+    // notes/architecture/local_observable_eval_plan.md). Set in hours
+    // (not days) at the CLI because typical values land in the 1–24 h
+    // range where days-as-fractions are awkward to read.
+    double min_cadence_hours = 4.0;
 };
 
 // Evolve-cache file format (QSTH blob). Fixed 128-byte header followed by
@@ -132,7 +150,7 @@ void print_usage(const char* prog) {
         << "Usage: " << prog
         << " --param <xml> [--csv-out <path>] [--binary-out <path>]\n"
         << "                  [--species-out <path>] [--compartments-out <path>]\n"
-        << "                  [--rules-out <path>] [--t-end-days N] [--dt-days N]\n"
+        << "                  [--rules-out <path>] [--t-end-days N] [--min-cadence-hours N]\n"
         << "                  [--scenario <scenario.yaml> --drug-metadata <drug_meta.yaml>]\n"
         << "                  [--evolve-to-diagnosis <healthy_state.yaml>]\n"
         << "                  [--dump-state <path> | --initial-state <path>]\n"
@@ -158,8 +176,15 @@ void print_usage(const char* prog) {
         << "  --evolve-trajectory-dt-days  <N>     dump every N days of model time\n"
         << "                                       (default 0 = use evolve spec step_days).\n"
         << "\n"
+        << "Output cadence:\n"
+        << "  --min-cadence-hours <N>  upper bound on inter-row spacing (default 4.0).\n"
+        << "                           CVODE runs CV_ONE_STEP and dumps a row whenever\n"
+        << "                           the elapsed time since the last dump exceeds\n"
+        << "                           this floor, plus at every dose boundary and at\n"
+        << "                           t_end. Replaces the deprecated --dt-days flag.\n"
+        << "\n"
         << "Legacy: " << prog
-        << " <param_xml> <csv_out> [t_end_days] [dt_days]\n";
+        << " <param_xml> <csv_out> [t_end_days] [min_cadence_hours]\n";
 }
 
 bool parse_args(int argc, char* argv[], Args& out) {
@@ -171,7 +196,11 @@ bool parse_args(int argc, char* argv[], Args& out) {
     if (argc > i && argv[i][0] != '-') { out.param_file = argv[i++]; }
     if (argc > i && argv[i][0] != '-') { out.csv_out    = argv[i++]; }
     if (argc > i && argv[i][0] != '-') { out.t_end_days = std::stod(argv[i++]); }
-    if (argc > i && argv[i][0] != '-') { out.dt_days    = std::stod(argv[i++]); }
+    // Legacy positional 4th arg used to be dt_days. The semantics are not
+    // bit-equal under the new CV_ONE_STEP cadence-floor scheme, so we
+    // reinterpret the value as min_cadence_hours rather than silently
+    // accepting a fixed-grid request and producing different outputs.
+    if (argc > i && argv[i][0] != '-') { out.min_cadence_hours = std::stod(argv[i++]); }
 
     for (; i < argc; ++i) {
         std::string a = argv[i];
@@ -203,9 +232,21 @@ bool parse_args(int argc, char* argv[], Args& out) {
         } else if (a == "--t-end-days") {
             const char* v = need_val("--t-end-days"); if (!v) return false;
             out.t_end_days = std::stod(v);
+        } else if (a == "--min-cadence-hours") {
+            const char* v = need_val("--min-cadence-hours"); if (!v) return false;
+            out.min_cadence_hours = std::stod(v);
         } else if (a == "--dt-days") {
-            const char* v = need_val("--dt-days"); if (!v) return false;
-            out.dt_days = std::stod(v);
+            // Hard-removed flag — the CV_ONE_STEP cadence-floor scheme has
+            // different semantics from a fixed dt grid (sample times are
+            // non-uniform; row count is solver-dependent). No silent alias.
+            std::cerr
+                << "--dt-days has been removed. Use --min-cadence-hours <N>\n"
+                   "  (upper bound on inter-row spacing, default 4.0). The new\n"
+                   "  CV_ONE_STEP scheme samples at solver-native cadence with a\n"
+                   "  cadence floor; outputs are not bit-equal to the old fixed\n"
+                   "  grid. See notes/architecture/local_observable_eval_plan.md D4."
+                << std::endl;
+            return false;
         } else if (a == "--scenario") {
             const char* v = need_val("--scenario"); if (!v) return false;
             out.scenario_yaml = v;
@@ -504,7 +545,9 @@ int main(int argc, char* argv[]) {
     const double time_factor = 86400.0;
 #endif
     double t_end = args.t_end_days * time_factor;
-    const double dt = args.dt_days * time_factor;
+    // CLI exposes hours; internal time axis is days (then time_factor).
+    const double min_cadence_days = args.min_cadence_hours / 24.0;
+    const double min_cadence_solver = min_cadence_days * time_factor;
 
     QSPParam param;
     param.initializeParams(args.param_file);
@@ -563,39 +606,55 @@ int main(int argc, char* argv[]) {
         csv << std::endl;
     }
 
-    // Binary v2 layout (header is 56 bytes):
-    //   uint32 magic, uint32 version=2, uint64 n_t,
+    // Binary v3 layout (header is 80 bytes):
+    //   uint32 magic, uint32 version=3, uint64 n_t,
     //   uint64 n_species, uint64 n_compartments, uint64 n_rules,
-    //   double dt_days, double t_end_days
-    // followed by n_t × (n_sp + n_comp + n_rules) doubles in row-major
-    // order (species first, then compartments, then rules — matching the
-    // order of the *_out name files). v1 (40-byte header, species-only
-    // body) is no longer produced; readers should accept it in
-    // backward-compat mode but can't be generated here anymore.
+    //   double min_cadence_hours, double t_end_days,
+    //   double t_offset_days, uint64 n_cvode_steps, uint64 reserved
+    // followed by n_t × (1 + n_sp + n_comp + n_rules) doubles in
+    // row-major order. The leading column per row is the user-relative
+    // sample time (days, i.e. (t_solver - t_offset) / time_factor); the
+    // remaining columns are species, compartments, rules in the same
+    // order as the *_out name files. Sample times are non-uniform under
+    // CV_ONE_STEP — see write_state below — which is why v3 stores time
+    // per-row instead of v2's reconstruct-from-i*dt scheme.
     //
-    // Header is written with a placeholder n_t; we seek back and patch
-    // it after stepping because float dt may yield one more or one fewer
-    // step than ceil(t_end/dt).
+    // Header is written with placeholder n_t and n_cvode_steps; both
+    // are patched after stepping completes.
     std::ofstream bin;
     const uint32_t MAGIC = 0x51535042u;  // "QSPB"
-    const uint32_t VERSION = 2;
+    const uint32_t VERSION = 3;
+    // Header field offsets (bytes from start of file). Used both at write
+    // time and when patching n_t / n_cvode_steps after the body is done.
+    constexpr std::streamoff OFF_N_TIMES = 8;       // after magic+version
+    constexpr std::streamoff OFF_N_CVODE_STEPS = 64; // after t_offset_days
     if (!args.binary_out.empty()) {
         bin.open(args.binary_out, std::ios::binary);
         uint64_t n_times_placeholder = 0;
         uint64_t n_sp64 = static_cast<uint64_t>(n_species);
         uint64_t n_comp64 = static_cast<uint64_t>(n_compartments);
         uint64_t n_rules64 = static_cast<uint64_t>(n_rules);
+        double t_offset_days_placeholder = 0.0;     // patched once we know t_offset
+        uint64_t n_cvode_steps_placeholder = 0;
+        uint64_t reserved = 0;
         bin.write(reinterpret_cast<const char*>(&MAGIC), sizeof(MAGIC));
         bin.write(reinterpret_cast<const char*>(&VERSION), sizeof(VERSION));
         bin.write(reinterpret_cast<const char*>(&n_times_placeholder), sizeof(uint64_t));
         bin.write(reinterpret_cast<const char*>(&n_sp64), sizeof(uint64_t));
         bin.write(reinterpret_cast<const char*>(&n_comp64), sizeof(uint64_t));
         bin.write(reinterpret_cast<const char*>(&n_rules64), sizeof(uint64_t));
-        bin.write(reinterpret_cast<const char*>(&args.dt_days), sizeof(double));
+        bin.write(reinterpret_cast<const char*>(&args.min_cadence_hours), sizeof(double));
         bin.write(reinterpret_cast<const char*>(&args.t_end_days), sizeof(double));
+        bin.write(reinterpret_cast<const char*>(&t_offset_days_placeholder), sizeof(double));
+        bin.write(reinterpret_cast<const char*>(&n_cvode_steps_placeholder), sizeof(uint64_t));
+        bin.write(reinterpret_cast<const char*>(&reserved), sizeof(uint64_t));
     }
 
-    const size_t n_cols = n_species + n_compartments + n_rules;
+    // Body row layout: [time_user_days, species..., compartments..., rules...].
+    // The leading time column is what makes v3 readable without needing the
+    // dt grid v2 used to reconstruct sample times from row index.
+    const size_t n_state_cols = n_species + n_compartments + n_rules;
+    const size_t n_cols = 1 + n_state_cols;
     std::vector<double> row(n_cols);
 
     // Optional: replace ICs with the healthy microinvasive state and integrate
@@ -716,14 +775,15 @@ int main(int argc, char* argv[]) {
             csv << std::endl;
         }
         if (bin.is_open()) {
+            row[0] = (t - t_offset) / time_factor;
             for (size_t i = 0; i < n_species; ++i) {
-                row[i] = ode.getSpeciesOutputValue(static_cast<int>(i));
+                row[1 + i] = ode.getSpeciesOutputValue(static_cast<int>(i));
             }
             for (size_t i = 0; i < n_compartments; ++i) {
-                row[n_species + i] = ode.get_compartment_volume(extra_comps[i]);
+                row[1 + n_species + i] = ode.get_compartment_volume(extra_comps[i]);
             }
             for (size_t i = 0; i < n_rules; ++i) {
-                row[n_species + n_compartments + i] =
+                row[1 + n_species + n_compartments + i] =
                     ode.get_assignment_rule_value(extra_rules[i]);
             }
             bin.write(reinterpret_cast<const char*>(row.data()),
@@ -798,56 +858,76 @@ int main(int argc, char* argv[]) {
 
     double t = t_offset;
     size_t next_dose_idx = 0;
-    // Tick index counts emitted output points (0 = the t=t_offset row above).
-    // Recomputing next_tick = t_offset + tick_idx * dt each iteration avoids
-    // accumulated float drift over many steps — important because we compare
-    // it to seg_end with exact equality.
-    int tick_idx = 1;
+    double t_last_dump = t_offset;
+    long n_cvode_steps_total = 0;
 
     double seg_end = dose_boundaries.empty()
         ? t_stop : std::min(dose_boundaries.front(), t_stop);
     ode.setupSamplingRun(seg_end, t);
 
+    // CV_ONE_STEP loop with cadence floor (D4). Each iteration advances by
+    // one CVODE internal step, then emits a row if either:
+    //   - elapsed solver time since last dump >= min_cadence_solver, or
+    //   - we've hit a dose boundary (seg_end), or
+    //   - we've hit t_stop.
+    // Within a segment the solver's CVodeSetStopTime (set by setupSamplingRun)
+    // bounds the step to seg_end; we still clamp tEndClamp for direction.
     int step = 0;
     while (t < t_stop) {
-        double next_tick = t_offset + tick_idx * dt;
-        if (next_tick > t_stop) next_tick = t_stop;
-        double target = std::min(next_tick, seg_end);
+        const double t_prev = t;
+        t = ode.simOdeStepOne(seg_end);
 
-        ode.simOdeSample(target);
-        t = target;
+        const bool at_seg_end = !(t < seg_end);  // robust to float roundoff
+        const bool at_t_stop = !(t < t_stop);
+        const bool cadence_due = (t - t_last_dump) >= min_cadence_solver;
 
-        // Exact float comparisons are safe here: `target` was assigned from
-        // one of {next_tick, seg_end, t_stop} and simOdeSample returns the
-        // caller's t verbatim. next_tick is recomputed from tick_idx*dt, not
-        // accumulated.
-        bool at_boundary = (t == seg_end) && (next_dose_idx < dose_boundaries.size());
-        bool at_tick = (t == next_tick);
-
-        // Apply bolus before the output emit so the written sample is
-        // post-dose (matching the step-based M10 port's semantics and the
-        // MATLAB sbiosimulate dose_schedule semantics).
-        if (at_boundary) apply_at(t);
-
-        if (at_tick) {
-            write_state(t);
-            n_times++;
-            tick_idx++;
+        if (at_seg_end && (next_dose_idx < dose_boundaries.size())) {
+            // Apply bolus first so the dump captures post-dose state. Matches
+            // MATLAB sbiosimulate dose_schedule semantics and the v2 path.
+            apply_at(t);
         }
 
-        if (at_boundary && t < t_stop) {
+        if (cadence_due || at_seg_end || at_t_stop) {
+            // Don't emit a duplicate row at t_offset (already written above),
+            // and don't emit twice for the same t if a step lands exactly on
+            // both a dose boundary and the cadence threshold.
+            if (t > t_last_dump) {
+                write_state(t);
+                n_times++;
+                t_last_dump = t;
+            }
+        }
+
+        if (at_seg_end && t < t_stop) {
+            // Account for steps in the segment we're about to leave; CVODE's
+            // step counter resets at the next setupSamplingRun re-init.
+            n_cvode_steps_total += ode.getNumSteps();
             ++next_dose_idx;
             seg_end = (next_dose_idx < dose_boundaries.size())
                 ? std::min(dose_boundaries[next_dose_idx], t_stop) : t_stop;
             ode.setupSamplingRun(seg_end, t);
         }
 
+        // Guard against CV_ONE_STEP returning the same t when CVODE thinks
+        // it's at the stop time but our (t < t_stop) loop check thinks
+        // otherwise (1-ULP edge cases on long horizons).
+        if (t == t_prev) {
+            if (at_t_stop) break;
+            std::cerr << "qsp_sim: CV_ONE_STEP did not advance at t="
+                      << (t - t_offset) / time_factor << " d, stopping."
+                      << std::endl;
+            break;
+        }
+
         ++step;
         if (step % 1000 == 0) {
             std::cerr << "  t=" << (t - t_offset) / time_factor
-                      << " days" << std::endl;
+                      << " days (steps=" << step << ")" << std::endl;
         }
     }
+    // Account for steps in the final segment (no further setupSamplingRun
+    // call would otherwise reset the counter).
+    n_cvode_steps_total += ode.getNumSteps();
 
     if (csv.is_open()) {
         csv.close();
@@ -855,15 +935,26 @@ int main(int argc, char* argv[]) {
                   << std::endl;
     }
     if (bin.is_open()) {
-        // n_times slot is at offset 8 in the header (after magic + version).
-        bin.seekp(sizeof(uint32_t) * 2, std::ios::beg);
+        // Patch n_t (offset 8) and the v3 trailing fields t_offset_days
+        // (offset 56) and n_cvode_steps (offset 64). Header layout is
+        // documented at the top of this file and at the writer site.
+        bin.seekp(OFF_N_TIMES, std::ios::beg);
         bin.write(reinterpret_cast<const char*>(&n_times), sizeof(uint64_t));
+        const double t_offset_days = t_offset / time_factor;
+        bin.seekp(56, std::ios::beg);
+        bin.write(reinterpret_cast<const char*>(&t_offset_days), sizeof(double));
+        const uint64_t n_cvode_steps_u64 =
+            static_cast<uint64_t>(n_cvode_steps_total);
+        bin.seekp(OFF_N_CVODE_STEPS, std::ios::beg);
+        bin.write(reinterpret_cast<const char*>(&n_cvode_steps_u64),
+                  sizeof(uint64_t));
         bin.close();
         std::cerr << "Wrote " << n_times << " time points × " << n_cols
-                  << " columns ("
+                  << " columns (1 time + "
                   << n_species << " species + "
                   << n_compartments << " compartments + "
-                  << n_rules << " rules) to "
+                  << n_rules << " rules; "
+                  << n_cvode_steps_total << " CVODE steps) to "
                   << args.binary_out << std::endl;
     }
     return 0;
