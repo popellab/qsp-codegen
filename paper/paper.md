@@ -77,7 +77,7 @@ The wheel ships a model-agnostic C++ runtime that consumer projects pull in via 
 
 - `CVODEBase` and `MolecularModelCVode` integrator wrappers around SUNDIALS/CVODE.
 - `ParamBase`: a base class for the generated parameter container.
-- A `qsp_sim` driver (`qsp_sim_main.cpp`) that parses YAML scenario and drug-metadata files, applies segmented dose schedules, writes CSV or binary trajectories, and reads/writes a packed evolve-cache used to share burn-in state across scenarios.
+- A `qsp_sim` driver (`qsp_sim_main.cpp`) that parses YAML scenario and drug-metadata files, applies segmented dose schedules, writes CSV or binary trajectories, and reads/writes a packed evolve-cache used to share burn-in state across scenarios. The driver runs CVODE in `CV_ONE_STEP` mode and emits a row whenever the elapsed solver time since the last dump exceeds a configurable cadence floor (`--min-cadence-hours`, default 4 h), plus at every dose boundary and at `t_end`. This preserves the integrator's adaptive stepping end-to-end — coarse sampling during slow regimes, fine sampling through stiff transients — instead of forcing a fixed-grid output that either oversamples long horizons or undersamples sharp drug-response transients.
 - A `model_hooks.h` interface declaring the `evolve_to_diagnosis` extension point, with a default no-op implementation in the static library so models without a burn-in phase need do nothing. Models that do require one (for example, evolving healthy tissue until a tumor reaches a target diameter) provide a strong definition that wins at link time, leaving the generated ABI untouched.
 
 ## Parity harness

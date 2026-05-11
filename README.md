@@ -76,7 +76,7 @@ target_link_libraries(qsp_sim PRIVATE qsp_sim_core::qsp_sim_core)
 ### Time units
 
 `qsp_sim` integrates in SI seconds by default (multiplies external
-`--t-end-days` and `--dt-days` by 86400 internally) on the assumption
+`--t-end-days` and dose times by 86400 internally) on the assumption
 that the SBML's `<listOfUnitDefinitions>` declares rates in `1/day`,
 `1/hr`, etc. and the codegen has unit-converted them to `1/s`. This
 matches QSP models authored with proper unit annotations.

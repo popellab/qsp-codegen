@@ -202,7 +202,10 @@ def main():
     p.add_argument("--t-end", type=float, default=365.0,
                    help="Integration end time, days (default: 365)")
     p.add_argument("--dt", type=float, default=0.1,
-                   help="Output dt, days (default: 0.1)")
+                   help="Output spacing, days. MATLAB uses this as a fixed "
+                        "OutputTimes grid; qsp_sim uses it as a CV_ONE_STEP "
+                        "cadence floor (passed as --min-cadence-hours = 24*dt). "
+                        "Default: 0.1 (= 2.4 h floor on the C++ side).")
     p.add_argument("--work", type=Path, default=HERE / "_work",
                    help="Scratch directory (default: ./_work)")
     p.add_argument("--out", type=Path, default=HERE / "results.csv",
@@ -290,7 +293,7 @@ def main():
             str(qsp_sim), "--param", str(param_xml),
             "--binary-out", str(bin_path),
             "--t-end-days", str(args.t_end),
-            "--dt-days", str(args.dt),
+            "--min-cadence-hours", str(args.dt * 24.0),
             # SimBiology's bare sbmlexport produces no listOfUnitDefinitions,
             # so the model's rate constants are in 1/day. Override the
             # binary's default 1/s assumption per invocation.
@@ -352,7 +355,7 @@ def main():
             str(qsp_sim), "--param", str(param_xml),
             "--csv-out", str(cpp_traj),
             "--t-end-days", str(args.t_end),
-            "--dt-days", str(args.dt),
+            "--min-cadence-hours", str(args.dt * 24.0),
             "--time-unit", "days",
         ] + scenario_args, capture_output=True)
         passed, report = parity_compare(
