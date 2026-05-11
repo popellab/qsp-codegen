@@ -51,6 +51,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -70,6 +71,7 @@
 // same symbol in an object file compiled directly into the executable
 // (strong definition wins over archive member at link time).
 #include "qsp_sim_core/model_hooks.h"
+#include "qsp_sim_core/trajectory_writer.h"
 
 using namespace CancerVCT;
 
@@ -647,56 +649,27 @@ int main(int argc, char* argv[]) {
         csv << std::endl;
     }
 
-    // Binary v3 layout (header is 80 bytes):
-    //   uint32 magic, uint32 version=3, uint64 n_t,
-    //   uint64 n_species, uint64 n_compartments, uint64 n_rules,
-    //   double min_cadence_hours, double t_end_days,
-    //   double t_offset_days, uint64 n_cvode_steps, uint64 reserved
-    // followed by n_t × (1 + n_sp + n_comp + n_rules) doubles in
-    // row-major order. The leading column per row is the user-relative
-    // sample time (days, i.e. (t_solver - t_offset) / time_factor); the
-    // remaining columns are species, compartments, rules in the same
-    // order as the *_out name files. Sample times are non-uniform under
-    // CV_ONE_STEP — see write_state below — which is why v3 stores time
-    // per-row instead of v2's reconstruct-from-i*dt scheme.
-    //
-    // Header is written with placeholder n_t and n_cvode_steps; both
-    // are patched after stepping completes.
+    // v3 binary writer (the "QSPB" format). Byte-level layout lives in
+    // qsp_sim_core/trajectory_writer.h so out-of-tree drivers (e.g.
+    // pdac-build's evolve_to_diagnosis) hit the same code path.
     std::ofstream bin;
-    const uint32_t MAGIC = 0x51535042u;  // "QSPB"
-    const uint32_t VERSION = 3;
-    // Header field offsets (bytes from start of file). Used both at write
-    // time and when patching n_t / n_cvode_steps after the body is done.
-    constexpr std::streamoff OFF_N_TIMES = 8;       // after magic+version
-    constexpr std::streamoff OFF_N_CVODE_STEPS = 64; // after t_offset_days
+    std::unique_ptr<TrajectoryWriter> bin_writer;
     if (!args.binary_out.empty()) {
         bin.open(args.binary_out, std::ios::binary);
-        uint64_t n_times_placeholder = 0;
-        uint64_t n_sp64 = static_cast<uint64_t>(n_species);
-        uint64_t n_comp64 = static_cast<uint64_t>(n_compartments);
-        uint64_t n_rules64 = static_cast<uint64_t>(n_rules);
-        double t_offset_days_placeholder = 0.0;     // patched once we know t_offset
-        uint64_t n_cvode_steps_placeholder = 0;
-        uint64_t reserved = 0;
-        bin.write(reinterpret_cast<const char*>(&MAGIC), sizeof(MAGIC));
-        bin.write(reinterpret_cast<const char*>(&VERSION), sizeof(VERSION));
-        bin.write(reinterpret_cast<const char*>(&n_times_placeholder), sizeof(uint64_t));
-        bin.write(reinterpret_cast<const char*>(&n_sp64), sizeof(uint64_t));
-        bin.write(reinterpret_cast<const char*>(&n_comp64), sizeof(uint64_t));
-        bin.write(reinterpret_cast<const char*>(&n_rules64), sizeof(uint64_t));
-        bin.write(reinterpret_cast<const char*>(&args.min_cadence_hours), sizeof(double));
-        bin.write(reinterpret_cast<const char*>(&args.t_end_days), sizeof(double));
-        bin.write(reinterpret_cast<const char*>(&t_offset_days_placeholder), sizeof(double));
-        bin.write(reinterpret_cast<const char*>(&n_cvode_steps_placeholder), sizeof(uint64_t));
-        bin.write(reinterpret_cast<const char*>(&reserved), sizeof(uint64_t));
+        bin_writer = std::make_unique<TrajectoryWriter>(
+            bin,
+            static_cast<uint64_t>(n_species),
+            static_cast<uint64_t>(n_compartments),
+            static_cast<uint64_t>(n_rules),
+            args.min_cadence_hours,
+            args.t_end_days);
     }
 
-    // Body row layout: [time_user_days, species..., compartments..., rules...].
-    // The leading time column is what makes v3 readable without needing the
-    // dt grid v2 used to reconstruct sample times from row index.
+    // Buffer for the state columns (species, compartments, rules) handed
+    // to TrajectoryWriter::write_row. The leading time column is owned by
+    // the writer, so this is n_state_cols wide rather than 1+n_state_cols.
     const size_t n_state_cols = n_species + n_compartments + n_rules;
-    const size_t n_cols = 1 + n_state_cols;
-    std::vector<double> row(n_cols);
+    std::vector<double> row(n_state_cols);
 
     // Optional: replace ICs with the healthy microinvasive state and integrate
     // forward until V_T diameter crosses the target. The state at return is
@@ -815,20 +788,19 @@ int main(int argc, char* argv[]) {
             }
             csv << std::endl;
         }
-        if (bin.is_open()) {
-            row[0] = (t - t_offset) / time_factor;
+        if (bin_writer) {
+            const double t_user_days = (t - t_offset) / time_factor;
             for (size_t i = 0; i < n_species; ++i) {
-                row[1 + i] = ode.getSpeciesOutputValue(static_cast<int>(i));
+                row[i] = ode.getSpeciesOutputValue(static_cast<int>(i));
             }
             for (size_t i = 0; i < n_compartments; ++i) {
-                row[1 + n_species + i] = ode.get_compartment_volume(extra_comps[i]);
+                row[n_species + i] = ode.get_compartment_volume(extra_comps[i]);
             }
             for (size_t i = 0; i < n_rules; ++i) {
-                row[1 + n_species + n_compartments + i] =
+                row[n_species + n_compartments + i] =
                     ode.get_assignment_rule_value(extra_rules[i]);
             }
-            bin.write(reinterpret_cast<const char*>(row.data()),
-                      static_cast<std::streamsize>(n_cols * sizeof(double)));
+            bin_writer->write_row(t_user_days, row.data(), n_state_cols);
         }
     };
 
@@ -975,22 +947,13 @@ int main(int argc, char* argv[]) {
         std::cerr << "Wrote " << n_times << " time points to " << args.csv_out
                   << std::endl;
     }
-    if (bin.is_open()) {
-        // Patch n_t (offset 8) and the v3 trailing fields t_offset_days
-        // (offset 56) and n_cvode_steps (offset 64). Header layout is
-        // documented at the top of this file and at the writer site.
-        bin.seekp(OFF_N_TIMES, std::ios::beg);
-        bin.write(reinterpret_cast<const char*>(&n_times), sizeof(uint64_t));
+    if (bin_writer) {
         const double t_offset_days = t_offset / time_factor;
-        bin.seekp(56, std::ios::beg);
-        bin.write(reinterpret_cast<const char*>(&t_offset_days), sizeof(double));
-        const uint64_t n_cvode_steps_u64 =
-            static_cast<uint64_t>(n_cvode_steps_total);
-        bin.seekp(OFF_N_CVODE_STEPS, std::ios::beg);
-        bin.write(reinterpret_cast<const char*>(&n_cvode_steps_u64),
-                  sizeof(uint64_t));
+        bin_writer->finalize(t_offset_days,
+                             static_cast<uint64_t>(n_cvode_steps_total));
         bin.close();
-        std::cerr << "Wrote " << n_times << " time points × " << n_cols
+        std::cerr << "Wrote " << bin_writer->n_times() << " time points × "
+                  << (1 + n_state_cols)
                   << " columns (1 time + "
                   << n_species << " species + "
                   << n_compartments << " compartments + "
