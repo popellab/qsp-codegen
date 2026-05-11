@@ -15,12 +15,17 @@ authors:
   - name: Joel Eliason
     orcid: 0000-0003-2227-8727
     affiliation: 1
+  - name: Atul Deshpande
+    orcid: 0000-0000-0000-0000  # TODO: fill in before submission
+    affiliation: 2
   - name: Aleksander S. Popel
     orcid: 0000-0000-0000-0000  # TODO: fill in before submission
     affiliation: 1
 affiliations:
   - name: Department of Biomedical Engineering, Johns Hopkins University, Baltimore, MD, USA
     index: 1
+  - name: Johns Hopkins University, Baltimore, MD, USA  # TODO: confirm department before submission
+    index: 2
 date: 6 May 2026
 bibliography: paper.bib
 ---

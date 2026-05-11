@@ -15,6 +15,11 @@ authors:
     email: jeliaso2@jh.edu
     orcid: "https://orcid.org/0000-0003-2227-8727"
     affiliation: "Johns Hopkins University, Department of Biomedical Engineering"
+  - family-names: Deshpande
+    given-names: Atul
+    # TODO: fill in ORCID before JOSS submission
+    # orcid: "https://orcid.org/XXXX-XXXX-XXXX-XXXX"
+    affiliation: "Johns Hopkins University"  # TODO: confirm department
   - family-names: Popel
     given-names: Aleksander S.
     # TODO: fill in ORCID before JOSS submission
