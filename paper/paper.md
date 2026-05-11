@@ -24,7 +24,7 @@ authors:
 affiliations:
   - name: Department of Biomedical Engineering, Johns Hopkins University, Baltimore, MD, USA
     index: 1
-  - name: Johns Hopkins University, Baltimore, MD, USA  # TODO: confirm department before submission
+  - name: Department of Oncology, Johns Hopkins University School of Medicine, Baltimore, MD, USA
     index: 2
 date: 6 May 2026
 bibliography: paper.bib

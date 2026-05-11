@@ -19,7 +19,7 @@ authors:
     given-names: Atul
     # TODO: fill in ORCID before JOSS submission
     # orcid: "https://orcid.org/XXXX-XXXX-XXXX-XXXX"
-    affiliation: "Johns Hopkins University"  # TODO: confirm department
+    affiliation: "Johns Hopkins University School of Medicine, Department of Oncology"
   - family-names: Popel
     given-names: Aleksander S.
     # TODO: fill in ORCID before JOSS submission
