@@ -53,6 +53,7 @@ packages = ["src/qsp_codegen"]
 "cpp/include/qsp_sim_core/MolecularModelCVode.h" = "qsp_codegen/cpp/include/qsp_sim_core/MolecularModelCVode.h"
 "cpp/include/qsp_sim_core/ParamBase.h" = "qsp_codegen/cpp/include/qsp_sim_core/ParamBase.h"
 "cpp/include/qsp_sim_core/model_hooks.h" = "qsp_codegen/cpp/include/qsp_sim_core/model_hooks.h"
+"cpp/include/qsp_sim_core/trajectory_writer.h" = "qsp_codegen/cpp/include/qsp_sim_core/trajectory_writer.h"
 "cpp/src/CVODEBase.cpp" = "qsp_codegen/cpp/src/CVODEBase.cpp"
 "cpp/src/ParamBase.cpp" = "qsp_codegen/cpp/src/ParamBase.cpp"
 "cpp/src/default_hooks.cpp" = "qsp_codegen/cpp/src/default_hooks.cpp"
