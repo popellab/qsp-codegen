@@ -38,13 +38,53 @@ def test_compare_detects_divergence(tmp_path: Path):
     assert "V_T.CD8" in report
 
 
+def test_compare_irregular_cpp_grid_interpolates(tmp_path: Path):
+    """Under qsp-codegen v3 (CV_ONE_STEP), the C++ side emits a non-uniform
+    time grid that doesn't line up with MATLAB's fixed dt. compare() should
+    linear-interpolate C++ onto MATLAB's grid and pass when the underlying
+    species function agrees."""
+    matlab_csv = tmp_path / "matlab.csv"
+    cpp_csv = tmp_path / "cpp.csv"
+    # MATLAB on a uniform 0.1 d grid; species value = 2*t exactly.
+    matlab_csv.write_text(
+        "Time,V_T.CD8\n"
+        + "\n".join(f"{t:.4f},{2 * t:.6e}" for t in [0.0, 0.1, 0.2, 0.3, 0.4, 0.5])
+        + "\n"
+    )
+    # C++ on an irregular grid that hits none of MATLAB's tick times; the
+    # exact linear shape means np.interp recovers the species value at any
+    # interior MATLAB tick to floating-point roundoff.
+    cpp_csv.write_text(
+        "Time,V_T.CD8\n"
+        + "\n".join(f"{t:.4f},{2 * t:.6e}" for t in [0.0, 0.07, 0.23, 0.41, 0.5])
+        + "\n"
+    )
+    passed, report = parity.compare(
+        str(matlab_csv), str(cpp_csv), rtol=1e-6, atol=1e-12
+    )
+    assert passed, report
+    assert "linear-interp" in report
+
+    # Sanity: divergence on the same irregular C++ grid still trips the
+    # comparator (scale species column by 2 → 100% rdiff at every point).
+    cpp_csv.write_text(
+        "Time,V_T.CD8\n"
+        + "\n".join(f"{t:.4f},{4 * t:.6e}" for t in [0.0, 0.07, 0.23, 0.41, 0.5])
+        + "\n"
+    )
+    passed, report = parity.compare(
+        str(matlab_csv), str(cpp_csv), rtol=0.05, atol=1e-9
+    )
+    assert not passed
+
+
 def test_run_cpp_trajectories_rejects_missing_binary(tmp_path: Path):
     with pytest.raises(FileNotFoundError, match="qsp_sim binary not found"):
         parity.run_cpp_trajectories(
             qsp_sim=tmp_path / "nope",
             param_xml=tmp_path / "nope.xml",
             out_csv=tmp_path / "out.csv",
-            t_end_days=1, dt_days=0.1,
+            t_end_days=1, min_cadence_hours=4.0,
         )
 
 
@@ -64,7 +104,7 @@ def test_run_cpp_trajectories_requires_drug_metadata_with_scenario(tmp_path: Pat
             qsp_sim=fake_bin,
             param_xml=fake_xml,
             out_csv=tmp_path / "out.csv",
-            t_end_days=1, dt_days=0.1,
+            t_end_days=1, min_cadence_hours=4.0,
             scenario_yaml=scenario,
         )
 
@@ -81,7 +121,7 @@ def test_run_cpp_trajectories_validates_kwarg_paths(tmp_path: Path):
             qsp_sim=fake_bin,
             param_xml=fake_xml,
             out_csv=tmp_path / "out.csv",
-            t_end_days=1, dt_days=0.1,
+            t_end_days=1, min_cadence_hours=4.0,
             evolve_to_diagnosis_yaml=tmp_path / "missing_healthy.yaml",
         )
 
