@@ -37,7 +37,12 @@ if exist('output_times_csv', 'var') && ~isempty(output_times_csv)
     % error in the cross-engine diff.
     cfg.SolverOptions.OutputTimes = readmatrix(output_times_csv);
 else
-    cfg.SolverOptions.OutputTimes = (0:0.1:stop_time)';
+    % Timed mode: leave OutputTimes empty so sbiosimulate returns
+    % CVODE's internal step grid. C++ does the same under CV_ONE_STEP +
+    % --min-cadence-hours; forcing a fixed 0.1d grid here would charge
+    % MATLAB for OutputTimes integrate-to-exact-time work that the C++
+    % side doesn't pay, making the comparison apples-to-oranges.
+    cfg.SolverOptions.OutputTimes = [];
 end
 t_load = toc(t_load_start);
 
