@@ -1,0 +1,13 @@
+# Dosing scenario for the benchmark's dosed regime.
+#
+# Six bolus doses of 50 mol of `Drug` into compartment c1, every 30 days
+# starting at day 30. Forces the C++ side through its segmented-sampling
+# path (CVODE re-init at each dose boundary) and the MATLAB side through
+# `sbiosimulate(model, dose_schedule)`.
+dosing:
+  patientWeight: 70
+  patientBSA: 1.9
+  drugs:
+    - Drug
+  Drug_dose: 50
+  Drug_schedule: [30, 30, 6]   # [start_day, interval_days, num_doses]

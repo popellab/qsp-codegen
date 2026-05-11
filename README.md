@@ -73,6 +73,33 @@ target_include_directories(qsp_sim PRIVATE qsp/ode sim)
 target_link_libraries(qsp_sim PRIVATE qsp_sim_core::qsp_sim_core)
 ```
 
+### Time units
+
+`qsp_sim` integrates in SI seconds by default (multiplies external
+`--t-end-days` and dose times by 86400 internally) on the assumption
+that the SBML's `<listOfUnitDefinitions>` declares rates in `1/day`,
+`1/hr`, etc. and the codegen has unit-converted them to `1/s`. This
+matches QSP models authored with proper unit annotations.
+
+Models exported by SimBiology's vanilla `sbmlexport` without unit
+definitions come through with rate constants left in their authoring
+unit (typically `1/day`). For these, pass `--time-unit days` at the
+command line so the runtime integrates in model-native days; the same
+binary handles both conventions:
+
+```bash
+# Unit-annotated SBML (default; production QSP models):
+qsp_sim --param param_all.xml --csv-out out.csv --t-end-days 365
+
+# SimBiology-vanilla export with unitless 1/day rates:
+qsp_sim --param param_all.xml --csv-out out.csv --t-end-days 365 \
+        --time-unit days
+```
+
+A consumer build can flip the *default* by compiling `qsp_sim` with
+`-DMODEL_UNITS` (sets the default time factor to 1.0); the runtime
+flag still wins on a per-invocation basis.
+
 ### Model-init hook (`evolve_to_diagnosis`)
 
 Declared in `qsp_sim_core/model_hooks.h`:

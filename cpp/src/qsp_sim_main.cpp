@@ -129,6 +129,12 @@ struct Args {
     // (not days) at the CLI because typical values land in the 1–24 h
     // range where days-as-fractions are awkward to read.
     double min_cadence_hours = 4.0;
+    // Per-invocation override for the time factor that scales external
+    // (--t-end-days, dose times) into the solver's internal time.
+    // <0 means "use compile-time default" (1.0 if MODEL_UNITS,
+    // else 86400.0). Set via --time-unit days|seconds, or directly with
+    // --time-factor <N>.
+    double time_factor_override = -1.0;
 };
 
 // Evolve-cache file format (QSTH blob). Fixed 128-byte header followed by
@@ -165,6 +171,15 @@ void print_usage(const char* prog) {
         << "                          read from the blob header.\n"
         << "  --params-hash   <hex>   stored in dumps, verified on loads (catches\n"
         << "                          cache/theta mismatches).\n"
+        << "\n"
+        << "Time-unit selection (overrides compile-time default):\n"
+        << "  --time-unit  days|seconds  treat model rate constants as 1/day or\n"
+        << "                             1/s respectively. SimBiology exports\n"
+        << "                             without listOfUnitDefinitions need\n"
+        << "                             'days'; qsp-codegen unit-converted\n"
+        << "                             models need 'seconds' (default).\n"
+        << "  --time-factor <N>          set the internal/external time scaling\n"
+        << "                             directly (advanced).\n"
         << "\n"
         << "Burn-in trajectory dump:\n"
         << "  --evolve-trajectory-out      <path>  with --evolve-to-diagnosis: dump dense\n"
@@ -271,6 +286,25 @@ bool parse_args(int argc, char* argv[], Args& out) {
         } else if (a == "--evolve-trajectory-dt-days") {
             const char* v = need_val("--evolve-trajectory-dt-days"); if (!v) return false;
             out.evolve_trajectory_dt_days = std::stod(v);
+        } else if (a == "--time-unit") {
+            const char* v = need_val("--time-unit"); if (!v) return false;
+            std::string s = v;
+            if (s == "days") {
+                out.time_factor_override = 1.0;
+            } else if (s == "seconds" || s == "s") {
+                out.time_factor_override = 86400.0;
+            } else {
+                std::cerr << "--time-unit must be 'days' or 'seconds', got '"
+                          << s << "'" << std::endl;
+                return false;
+            }
+        } else if (a == "--time-factor") {
+            const char* v = need_val("--time-factor"); if (!v) return false;
+            out.time_factor_override = std::stod(v);
+            if (out.time_factor_override <= 0.0) {
+                std::cerr << "--time-factor must be > 0" << std::endl;
+                return false;
+            }
         } else if (a == "-h" || a == "--help") {
             return false;
         } else {
@@ -539,11 +573,18 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // Compile-time default chosen by the consumer build (MODEL_UNITS for
+    // SBML authored in days with no unit annotations; default for SBML
+    // with proper /s unit definitions emitted by qsp-codegen). Overridable
+    // per invocation via --time-unit / --time-factor so the same binary
+    // works against models authored in either convention.
 #ifdef MODEL_UNITS
-    const double time_factor = 1.0;
+    constexpr double default_time_factor = 1.0;
 #else
-    const double time_factor = 86400.0;
+    constexpr double default_time_factor = 86400.0;
 #endif
+    const double time_factor = (args.time_factor_override > 0.0)
+        ? args.time_factor_override : default_time_factor;
     double t_end = args.t_end_days * time_factor;
     // CLI exposes hours; internal time axis is days (then time_factor).
     const double min_cadence_days = args.min_cadence_hours / 24.0;
