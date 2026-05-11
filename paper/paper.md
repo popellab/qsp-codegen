@@ -18,8 +18,8 @@ authors:
     equal-contrib: true
     affiliation: 1
   - name: Atul Deshpande
-    orcid: 0000-0000-0000-0000  # TODO: fill in before submission
-    affiliation: 2
+    orcid: 0000-0001-5144-6924  # TODO: fill in before submission
+    affiliation: 2-5
   - name: Aleksander S. Popel
     orcid: 0000-0000-0000-0000  # TODO: fill in before submission
     affiliation: 1
@@ -28,6 +28,12 @@ affiliations:
     index: 1
   - name: Department of Oncology, Johns Hopkins University School of Medicine, Baltimore, MD, USA
     index: 2
+  - name: Convergence Institute, Johns Hopkins University, Baltimore, MD, USA
+    index: 3
+  - name: Department of Electrical Engineering, Johns Hopkins University, Baltimore, MD, USA
+    index: 4
+  - name: Data Science and AI Institute, Johns Hopkins University, Baltimore, MD, USA
+    index: 5
 date: 6 May 2026
 bibliography: paper.bib
 ---
