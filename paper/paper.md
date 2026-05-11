@@ -11,9 +11,11 @@ tags:
 authors:
   - name: Chase Christenson
     orcid: 0000-0000-0000-0000  # TODO: fill in before submission
+    equal-contrib: true
     affiliation: 1
   - name: Joel Eliason
     orcid: 0000-0003-2227-8727
+    equal-contrib: true
     affiliation: 1
   - name: Atul Deshpande
     orcid: 0000-0000-0000-0000  # TODO: fill in before submission
@@ -99,6 +101,6 @@ The emitted sources, plus the `qsp_sim_core` runtime located via CMake, build a 
 
 # Acknowledgements
 
-This work was supported by the National Institutes of Health and the Lustgarten Foundation. The authors thank the Maryland Advanced Research Computing Center (MARCC) for HPC resources used to validate the generated simulator at scale.
+Chase Christenson and Joel Eliason contributed equally to this work and are listed as co-first authors. This work was supported by the National Institutes of Health and the Lustgarten Foundation. The authors thank the Maryland Advanced Research Computing Center (MARCC) for HPC resources used to validate the generated simulator at scale.
 
 # References
