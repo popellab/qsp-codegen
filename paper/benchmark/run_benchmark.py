@@ -338,28 +338,57 @@ def main():
     cpp_cold = time_subprocess(cpp_cmd_no_dose, args.cold_reps,
                                capture_output=True)
 
-    # 3b. Parity check (untimed). Run qsp_sim once with --csv-out for each
-    # regime and diff against MATLAB's last trajectory.
-    print("\n[parity] running qsp_sim with --csv-out for both regimes...")
+    # 3b. Parity check (untimed). Zero-interpolation scheme:
+    #   1. Run qsp_sim with --csv-out at solver-native cadence. The first
+    #      column of that CSV is the C++ sample-time grid.
+    #   2. Re-run MATLAB with `OutputTimes = cpp_times` so SimBiology
+    #      evaluates at the *same* timepoints C++ did.
+    #   3. Compare the two CSVs row-by-row with no interpolation.
+    # This removes the only remaining source of false-positive disagreement
+    # (linear interp of either trajectory across fast drug-decay transients
+    # or instantaneous boluses).
+    print("\n[parity] running qsp_sim → MATLAB-at-C++-times → row diff...")
     from qsp_codegen.parity import compare as parity_compare
     parity_results = []
-    for label, scenario_args, matlab_traj in (
-        ("no-dosing", [], args.work / "matlab_traj.csv"),
+    for label, scenario_args, apply_doses in (
+        ("no-dosing", [], False),
         ("dosed",
          ["--scenario", str(scenario_yaml),
           "--drug-metadata", str(drug_meta_yaml)],
-         args.work / "matlab_traj_dosed.csv"),
+         True),
     ):
         cpp_traj = args.work / f"cpp_traj_{label.replace('-', '_')}.csv"
         run([
             str(qsp_sim), "--param", str(param_xml),
             "--csv-out", str(cpp_traj),
             "--t-end-days", str(args.t_end),
-            "--min-cadence-hours", str(args.dt * 24.0),
+            "--min-cadence-hours", "0.01",
             "--time-unit", "days",
         ] + scenario_args, capture_output=True)
+
+        # Extract C++ sample times into a one-column CSV for MATLAB.
+        cpp_times_csv = args.work / f"cpp_times_{label.replace('-', '_')}.csv"
+        cpp_times = np.genfromtxt(cpp_traj, delimiter=",",
+                                  skip_header=1, usecols=0)
+        np.savetxt(cpp_times_csv, cpp_times, fmt="%.12g")
+
+        # Re-run MATLAB at exactly those timepoints. One rep, no warmup —
+        # this is the parity sample, not a timed run.
+        matlab_traj_parity = args.work / f"matlab_traj_{label.replace('-', '_')}_parity.csv"
+        run([args.matlab, "-batch", "; ".join([
+            f"sbml_path='{args.sbml}'",
+            f"reps=1",
+            f"stop_time={args.t_end}",
+            f"out_csv='{args.work / f'_parity_times_{label}.csv'}'",
+            f"load_csv='{args.work / f'_parity_load_{label}.csv'}'",
+            f"traj_csv='{matlab_traj_parity}'",
+            f"output_times_csv='{cpp_times_csv}'",
+            f"apply_doses={'true' if apply_doses else 'false'}",
+            f"run('{HERE / 'bench_matlab.m'}')",
+        ])])
+
         passed, report = parity_compare(
-            str(matlab_traj), str(cpp_traj),
+            str(matlab_traj_parity), str(cpp_traj),
             rtol=args.parity_rtol, atol=args.parity_atol,
         )
         parity_results.append((label, passed, report))

@@ -48,15 +48,15 @@ SBML offers a portable specification for systems biology ODE models, and several
 
 `qsp-codegen` is not a competitor to AMICI or libRoadRunner for general systems-biology workflows. It occupies a narrower niche: it is the SBML-to-simulator step inside a QSP-specific stack that includes the `qsp-hpc-tools` HPC orchestration layer [@qsp_hpc_tools] and downstream Bayesian inference.
 
-The reproducible benchmark in `paper/benchmark/` exports a 25-compartment, 73-reaction model from SimBiology and runs it under both backends with matched SUNDIALS tolerances (`reltol=1e-6`, `abstol=1e-9`) over a 365-day horizon. Trajectories are checked for agreement (worst per-species relative error 1%) before timings are reported. Three regimes are shown (medians of 30 repetitions; cold-start medians of 3, p25–p75 in parentheses):
+The reproducible benchmark in `paper/benchmark/` exports a 25-compartment, 73-reaction model from SimBiology and runs it under both backends with matched SUNDIALS tolerances (`reltol=1e-6`, `abstol=1e-9`) over a 365-day horizon. To eliminate interpolation error from the agreement check, MATLAB is re-run with `OutputTimes` set to qsp-codegen's solver-native sample grid so trajectories are diffed row-by-row at identical timepoints; both regimes pass at `rtol=5e-3`, `atol=1e-6` before timings are reported. Three regimes are shown (medians of 30 repetitions; cold-start medians of 3, p25–p75 in parentheses):
 
 | Mode | MATLAB SimBiology (s) | qsp-codegen / CVODE (s) | Speedup |
 |---|---|---|---|
-| Integration only, no dosing | 0.011 (0.011–0.012) | 0.0058 (0.0056–0.0059) | 2.0× |
-| Integration only, 6-bolus schedule | 0.017 (0.016–0.018) | 0.0069 (0.0067–0.0074) | 2.5× |
-| Wall-clock per invocation, no dosing | 8.271 (8.251–8.358) | 0.0084 (0.0083–0.0100) | ≈980× |
+| Integration only, no dosing | 0.029 (0.017–0.038) | 0.0008 (0.0007–0.0009) | 36× |
+| Integration only, 6-bolus schedule | 0.018 (0.017–0.019) | 0.0027 (0.0025–0.0030) | 6.6× |
+| Wall-clock per invocation, no dosing | 8.183 (7.673–8.237) | 0.0040 (0.0039–0.0045) | ≈2000× |
 
-The integration-only regime isolates ODE-solver work; both engines run CVODE with matched tolerances, so the ~2× advantage at this size reflects per-call effects we did not decompose (compiled vs. accelerator-JIT'd RHS dispatch, analytical vs. finite-difference Jacobian, state-vector marshalling) and is expected to grow with model size and stiffness. The wall-clock regime is what an SBI workflow pays per call when not using a persistent MATLAB worker pool — MATLAB's process startup dominates and the gap stretches to three orders of magnitude end-to-end.
+The integration-only regime isolates ODE-solver work; both engines run CVODE with matched tolerances, so the one-to-two-order-of-magnitude advantage at this model size reflects per-call effects we did not decompose (compiled vs. accelerator-JIT'd RHS dispatch, analytical vs. finite-difference Jacobian, state-vector marshalling, CV_ONE_STEP cadence-floor output vs. fixed-grid `OutputTimes`) and is expected to grow with model size and stiffness. The wall-clock regime is what an SBI workflow pays per call when not using a persistent MATLAB worker pool — MATLAB's process startup dominates and the gap stretches to three orders of magnitude end-to-end.
 
 # Design and key features
 

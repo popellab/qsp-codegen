@@ -31,7 +31,14 @@ set(cfg, 'SolverType', 'sundials');
 cfg.SolverOptions.RelativeTolerance = 1e-6;
 cfg.SolverOptions.AbsoluteTolerance = 1e-9;
 cfg.StopTime = stop_time;
-cfg.SolverOptions.OutputTimes = (0:0.1:stop_time)';
+if exist('output_times_csv', 'var') && ~isempty(output_times_csv)
+    % Parity mode: caller passes a CSV of C++ sample times so MATLAB
+    % evaluates at the *exact same* timepoints, eliminating interpolation
+    % error in the cross-engine diff.
+    cfg.SolverOptions.OutputTimes = readmatrix(output_times_csv);
+else
+    cfg.SolverOptions.OutputTimes = (0:0.1:stop_time)';
+end
 t_load = toc(t_load_start);
 
 dose_arg = {};
