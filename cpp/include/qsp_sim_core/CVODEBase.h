@@ -74,6 +74,26 @@ public:
 	//! / resetSolver. Wraps CVodeGetNumSteps for instrumentation.
 	long getNumSteps() const;
 
+	//! Per-step CVODE diagnostics for stiffness debugging. All counters are
+	//! cumulative since the last CVodeReInit (i.e. since the last
+	//! setupSamplingRun / resetSolver call). Take diffs across steps to get
+	//! per-step values. last_h / cur_h are the actually-taken last step and
+	//! the controller's predicted next step; last_order is the BDF order
+	//! used on the most recent successful step.
+	struct StepStats {
+		long nst;          // cumulative steps
+		long nfe;          // RHS evaluations
+		long netf;         // error-test failures (controller cut h)
+		long ncfn;         // nonlinear-solver convergence failures (Newton)
+		long nje;          // Jacobian evaluations
+		long nni;          // total Newton iterations
+		long nsetups;      // linear-solver setups
+		int  last_order;   // BDF order used on last step
+		double last_h;     // step size of last successful step
+		double cur_h;      // controller's predicted next step
+	};
+	StepStats getStepStats() const;
+
 	//! One-time setup before the first simOdeSample call: sets the CVODE
 	//! stop time to t_end_of_sim so CV_NORMAL stepping won't walk past it,
 	//! and runs any pending initial-assignment events at t0.
@@ -82,7 +102,17 @@ public:
 	//! internal time when entering a sampling run after a prior
 	//! simOdeStep-based phase (e.g. evolve_to_diagnosis); if the fast path
 	//! runs from fresh ICs, leave it at the 0.0 default.
-	void setupSamplingRun(double tEndOfSim, double t0 = 0.0);
+	//!
+	//! `h0_hint` (optional, in solver time units): if > 0, passed to
+	//! CVodeSetInitStep so the post-ReInit step doesn't start from the
+	//! CVHin estimator. Use this when re-initing across a discontinuity
+	//! (e.g. a bolus event): the CVHin estimator looks at ||f(t,y)||_WRMS
+	//! at the new state, which can be huge if the perturbation jolts a
+	//! fast-binding subsystem, producing a sub-ULP h₀ that stalls
+	//! progress. Passing the pre-event h_cur (or any sane O(seconds)
+	//! value) restores MATLAB-parity behavior across events.
+	void setupSamplingRun(double tEndOfSim, double t0 = 0.0,
+	                      double h0_hint = 0.0);
 
 	//! examples of optional output
 	void PrintFinalStats(void *cvode_mem);

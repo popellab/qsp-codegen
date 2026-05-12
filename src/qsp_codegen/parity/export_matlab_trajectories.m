@@ -54,7 +54,14 @@ if ~exist('stop_time', 'var') || isempty(stop_time)
     stop_time = 365;
 end
 cfg.StopTime = stop_time;
-cfg.SolverOptions.OutputTimes = (0:0.1:stop_time)';
+% If output_times_csv is provided, pin MATLAB's sample grid to the C++
+% grid so the parity comparison is row-aligned (no interpolation across
+% bolus discontinuities). Otherwise use the default 0.1 d grid.
+if exist('output_times_csv', 'var') && ~isempty(output_times_csv)
+    cfg.SolverOptions.OutputTimes = readmatrix(output_times_csv);
+else
+    cfg.SolverOptions.OutputTimes = (0:0.1:stop_time)';
+end
 
 % Optional: override model values with those from a param_all XML so MATLAB
 % simulates with the exact same ICs / parameters as the C++ run.
@@ -198,7 +205,11 @@ if evolve_enabled
     end
     % Reinstate the scenario's output grid in case the evolve mutated it.
     cfg.StopTime = stop_time;
-    cfg.SolverOptions.OutputTimes = (0:0.1:stop_time)';
+    if exist('output_times_csv', 'var') && ~isempty(output_times_csv)
+        cfg.SolverOptions.OutputTimes = readmatrix(output_times_csv);
+    else
+        cfg.SolverOptions.OutputTimes = (0:0.1:stop_time)';
+    end
 end
 
 if isempty(dose_schedule)

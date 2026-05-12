@@ -47,6 +47,7 @@
  */
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iomanip>
@@ -878,6 +879,20 @@ int main(int argc, char* argv[]) {
         ? t_stop : std::min(dose_boundaries.front(), t_stop);
     ode.setupSamplingRun(seg_end, t);
 
+    // Per-step CVODE diagnostics: when QSP_TRACE_CVODE=1, log post-step
+    // stats every step (or every N steps if set to an integer > 1). Counters
+    // are cumulative since the last setupSamplingRun, so we keep the previous
+    // snapshot to emit deltas (errfail/convfail/jac evals per step). Diagnoses
+    // h-collapse: is the controller cutting h via error-test failures (stiff
+    // RHS at this tol) or via nonlinear-conv failures (bad Jacobian / linsol)?
+    const char* trace_env = std::getenv("QSP_TRACE_CVODE");
+    int trace_every = 0;
+    if (trace_env && *trace_env) {
+        trace_every = std::atoi(trace_env);
+        if (trace_every < 1) trace_every = 1;
+    }
+    CVODEBase::StepStats prev_stats{};
+
     // CV_ONE_STEP loop with cadence floor (D4). Each iteration advances by
     // one CVODE internal step, then emits a row if either:
     //   - elapsed solver time since last dump >= min_cadence_solver, or
@@ -890,11 +905,40 @@ int main(int argc, char* argv[]) {
         const double t_prev = t;
         t = ode.simOdeStepOne(seg_end);
 
+        if (trace_every > 0 && (step % trace_every) == 0) {
+            const auto s = ode.getStepStats();
+            std::cerr << "  [cvode] t=" << (t - t_offset) / time_factor
+                      << "d step=" << step
+                      << " nst=" << s.nst
+                      << " ord=" << s.last_order
+                      << " h_last=" << s.last_h
+                      << " h_cur=" << s.cur_h
+                      << " dnetf=" << (s.netf - prev_stats.netf)
+                      << " dncfn=" << (s.ncfn - prev_stats.ncfn)
+                      << " dnje=" << (s.nje - prev_stats.nje)
+                      << " dnfe=" << (s.nfe - prev_stats.nfe)
+                      << " dnni=" << (s.nni - prev_stats.nni)
+                      << std::endl;
+            prev_stats = s;
+        }
+
         const bool at_seg_end = !(t < seg_end);  // robust to float roundoff
         const bool at_t_stop = !(t < t_stop);
         const bool cadence_due = (t - t_last_dump) >= min_cadence_solver;
 
+        // Carry the pre-event step size across the dose discontinuity so the
+        // post-ReInit step doesn't fall into CVHin's degenerate h₀-pick when
+        // the bolus jolts a fast-binding subsystem (e.g. PD1/aPD1 synapse
+        // binding after a V_C.aPD1 bolus). See setupSamplingRun for context.
+        // Cap the hint at 1 s of solver time: pre-event h_cur can be O(1e4)s
+        // on smooth segments, which is far too aggressive for the post-bolus
+        // state (CVODE burns dozens of Newton iters cutting it back down).
+        // 1 s is well above any plausible ULP at solver times ≤ 1e10 s and
+        // is conservative enough that BDF converges in one Newton iter.
+        double h_carry = 0.0;
         if (at_seg_end && (next_dose_idx < dose_boundaries.size())) {
+            constexpr double H_CARRY_CAP = 1.0;  // seconds
+            h_carry = std::min(ode.getStepStats().cur_h, H_CARRY_CAP);
             // Apply bolus first so the dump captures post-dose state. Matches
             // MATLAB sbiosimulate dose_schedule semantics and the v2 path.
             apply_at(t);
@@ -918,7 +962,11 @@ int main(int argc, char* argv[]) {
             ++next_dose_idx;
             seg_end = (next_dose_idx < dose_boundaries.size())
                 ? std::min(dose_boundaries[next_dose_idx], t_stop) : t_stop;
-            ode.setupSamplingRun(seg_end, t);
+            ode.setupSamplingRun(seg_end, t, h_carry);
+            // CVODE counters are reset by CVodeReInit; baseline the
+            // per-step delta snapshot so the first post-dose log row
+            // reports clean per-step deltas instead of a negative jump.
+            prev_stats = CVODEBase::StepStats{};
         }
 
         // Guard against CV_ONE_STEP returning the same t when CVODE thinks

@@ -154,6 +154,7 @@ def run_matlab_trajectories(
     stop_time: float = 365.0,
     scenario_yaml: Optional[Path] = None,
     evolve_function_name: Optional[str] = None,
+    output_times_csv: Optional[Path] = None,
     matlab_binary: str = "matlab",
     timeout: float = 600.0,
 ) -> Path:
@@ -183,6 +184,14 @@ def run_matlab_trajectories(
     ]
     if scenario_yaml is not None:
         cmd_parts.append(f"scenario_yaml='{scenario_yaml}';")
+    if output_times_csv is not None:
+        # When set, MATLAB reads this CSV (one float per line) and uses
+        # those values as its SolverOptions.OutputTimes — pinning MATLAB's
+        # sample grid to the C++ grid so the parity comparison is
+        # row-aligned with no interpolation. Without this, linear interp
+        # across a bolus discontinuity produces spurious post-bolus values
+        # at pre-bolus timestamps. Match how paper/benchmark/ does it.
+        cmd_parts.append(f"output_times_csv='{output_times_csv}';")
     if evolve_function_name is not None:
         # MATLAB scripts use the `matlab_evolve_function` handle variable.
         cmd_parts.append(f"matlab_evolve_function=@{evolve_function_name};")
