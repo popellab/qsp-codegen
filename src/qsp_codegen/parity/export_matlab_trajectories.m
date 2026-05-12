@@ -130,8 +130,20 @@ dose_schedule = [];
 if exist('scenario_yaml', 'var') && ~isempty(scenario_yaml)
     fprintf('Loading dosing scenario from %s\n', scenario_yaml);
     scenario = yaml_read(scenario_yaml);
-    if isfield(scenario, 'dosing') && isfield(scenario.dosing, 'drugs') ...
-            && ~isempty(scenario.dosing.drugs)
+    % Normalize drug list before the empty check: yaml_read can parse a
+    % YAML `drugs: []` as `{[]}` (a 1×1 cell containing []), which the
+    % cheap `~isempty(...)` guard misses, sending an empty drug name into
+    % schedule_dosing and crashing drugless scenarios.
+    drug_list = {};
+    if isfield(scenario, 'dosing') && isfield(scenario.dosing, 'drugs')
+        drug_list = scenario.dosing.drugs;
+        if ~iscell(drug_list); drug_list = {drug_list}; end
+        drug_list = drug_list(~cellfun(@(d) ...
+            isempty(d) || (ischar(d) && isempty(strtrim(d))), drug_list));
+    end
+    if isempty(drug_list)
+        fprintf('  no drugs scheduled\n');
+    else
         dosing_args = {};
         patient_weight = 70;
         patient_bsa = 1.9;
@@ -141,8 +153,6 @@ if exist('scenario_yaml', 'var') && ~isempty(scenario_yaml)
         if isfield(scenario.dosing, 'patientBSA')
             patient_bsa = scenario.dosing.patientBSA;
         end
-        drug_list = scenario.dosing.drugs;
-        if ~iscell(drug_list); drug_list = {drug_list}; end
 
         % Pass through each <drug>_dose and <drug>_schedule pair.
         % Schedule arrays in YAML are [start, interval, num_doses];
