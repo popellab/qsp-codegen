@@ -542,11 +542,20 @@ void CVODEBase::resetSolver(realtype t0, realtype t1){
 	stale state, not the properly-initialized one.
 
 */
-void CVODEBase::setupSamplingRun(double tEndOfSim, double t0){
+void CVODEBase::setupSamplingRun(double tEndOfSim, double t0, double h0_hint){
 	restore_y();
 	resolveEvents(t0);
 	CVodeReInit(_cvode_mem, t0, _y);
 	CVodeSetStopTime(_cvode_mem, tEndOfSim);
+	if (h0_hint > 0.0) {
+		// Skip CVHin's heuristic h₀ pick. CVHin estimates h₀ from
+		// ||f(t0,y0)||_WRMS, which collapses to sub-ULP at solver times
+		// O(1e8) s when a bolus jolts a fast-binding subsystem — the
+		// step then advances t by less than one double-precision ULP
+		// and the outer loop's "did not advance" guard aborts the run.
+		// Passing the pre-event h_cur as the hint mirrors SimBiology.
+		CVodeSetInitStep(_cvode_mem, static_cast<realtype>(h0_hint));
+	}
 }
 
 /*! Advance CVODE from its current internal time to tEnd in CV_NORMAL mode.
@@ -599,6 +608,24 @@ long CVODEBase::getNumSteps() const {
 		return 0;
 	}
 	return n_steps;
+}
+
+CVODEBase::StepStats CVODEBase::getStepStats() const {
+	StepStats s{};
+	CVodeGetNumSteps(_cvode_mem, &s.nst);
+	CVodeGetNumRhsEvals(_cvode_mem, &s.nfe);
+	CVodeGetNumErrTestFails(_cvode_mem, &s.netf);
+	CVodeGetNumNonlinSolvConvFails(_cvode_mem, &s.ncfn);
+	CVodeGetNumJacEvals(_cvode_mem, &s.nje);
+	CVodeGetNumNonlinSolvIters(_cvode_mem, &s.nni);
+	CVodeGetNumLinSolvSetups(_cvode_mem, &s.nsetups);
+	CVodeGetLastOrder(_cvode_mem, &s.last_order);
+	realtype hlast = 0.0, hcur = 0.0;
+	CVodeGetLastStep(_cvode_mem, &hlast);
+	CVodeGetCurrentStep(_cvode_mem, &hcur);
+	s.last_h = static_cast<double>(hlast);
+	s.cur_h = static_cast<double>(hcur);
+	return s;
 }
 // ----- Evolve-cache full-state serialization -----------------------------
 //
