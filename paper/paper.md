@@ -10,7 +10,7 @@ tags:
   - ODE solvers
 authors:
   - name: Chase Christenson
-    orcid: 0000-0000-0000-0000  # TODO: fill in before submission
+    orcid: 0000-0003-2395-4408
     equal-contrib: true
     affiliation: 1
   - name: Joel Eliason
@@ -18,23 +18,37 @@ authors:
     equal-contrib: true
     affiliation: 1
   - name: Atul Deshpande
-    orcid: 0000-0000-0000-0000  # TODO: fill in before submission
-    affiliation: 2
+    orcid: 0000-0001-5144-6924
+    affiliation: "2, 3, 4, 5"
   - name: Aleksander S. Popel
-    orcid: 0000-0000-0000-0000  # TODO: fill in before submission
+    orcid: 0000-0002-6706-9235
     affiliation: 1
+  # TODO: pending Sasha's reply — invite as coauthors? They built the spQSP
+  # framework (Gong2021, RuizMartinez2022) that qsp-codegen extracts from.
+  # - name: Chang Gong
+  #   orcid: TODO
+  #   affiliation: TODO
+  # - name: Alvaro Ruiz-Martinez
+  #   orcid: TODO
+  #   affiliation: TODO
 affiliations:
   - name: Department of Biomedical Engineering, Johns Hopkins University, Baltimore, MD, USA
     index: 1
   - name: Department of Oncology, Johns Hopkins University School of Medicine, Baltimore, MD, USA
     index: 2
-date: 6 May 2026
+  - name: Convergence Institute, Johns Hopkins University, Baltimore, MD, USA
+    index: 3
+  - name: Department of Electrical Engineering, Johns Hopkins University, Baltimore, MD, USA
+    index: 4
+  - name: Data Science and AI Institute, Johns Hopkins University, Baltimore, MD, USA
+    index: 5
+date: 18 May 2026
 bibliography: paper.bib
 ---
 
 # Summary
 
-Quantitative systems pharmacology (QSP) models are mechanistic, ordinary differential equation (ODE)-based representations of disease biology and drug action used throughout pharmaceutical development [@Gadkar2016; @Allen2016; @Craig2023]. They are most often constructed in MATLAB's SimBiology, which provides a graphical and SBML-compatible authoring environment but a stiff, MATLAB-bound integrator that becomes a bottleneck when models are exercised in modern inference pipelines such as simulation-based inference (SBI) [@Cranmer2020; @Goncalves2020].
+Quantitative systems pharmacology (QSP) models are mechanistic, ordinary differential equation (ODE)-based representations of disease biology and drug action used throughout pharmaceutical development [@Gadkar2016; @Allen2016; @Craig2023; @Sove2020; @Wang2025]. They are often constructed in MATLAB's SimBiology, which provides a graphical and SBML-compatible authoring environment but a MATLAB-bound runtime that becomes a bottleneck when models are exercised in modern inference pipelines such as simulation-based inference (SBI) [@Cranmer2020; @Goncalves2020].
 
 `qsp-codegen` is a Python package that takes a SimBiology-exported SBML Level 2 Version 4 file and emits a complete set of C++ sources for a CVODE-backed standalone simulator [@Hindmarsh2005]. The emitted code, together with a small bundled C++ runtime (`qsp_sim_core`) that the wheel ships and exposes through a CMake package, compiles into a `qsp_sim` executable that preserves the model's species, parameters, reactions, and initial state and substantially reduces per-call simulation cost relative to the original SimBiology workflow (see the benchmark below).
 
@@ -43,9 +57,9 @@ Quantitative systems pharmacology (QSP) models are mechanistic, ordinary differe
 SBML offers a portable specification for systems biology ODE models, and several mature tools generate executable code from SBML, including AMICI [@Frohlich2021], libRoadRunner [@Somogyi2015], SBMLtoODEpy [@Ruggiero2019], and COPASI [@Hoops2006]. These tools are excellent general-purpose simulators, but QSP applications place a few specific demands that motivate a smaller, focused code generator:
 
 1. **SimBiology-exported SBML quirks.** Production QSP models frequently rely on patterns that are idiomatic in SimBiology but awkward for general SBML toolchains: dotted `Compartment.Species` identifiers, MathML where `max`/`min` are emitted as `<ci>max</ci>` identifier nodes rather than the standard `<max/>` operator, and `initialAssignment` rules that override XML `initialAmount`/`initialConcentration` values and must be evaluated in concentration space before being converted back to amounts for the integrator. `qsp-codegen` is written against the SBML dialect that SimBiology actually emits and normalizes these constructs explicitly.
-2. **Optional dependency footprint.** General SBML simulators bring substantial dependency stacks. `qsp-codegen` requires only `sympy` and `numpy` at code-generation time; the runtime needs only CVODE.
+2. **Optional dependency footprint.** General SBML simulators bring substantial dependency stacks. `qsp-codegen` requires only `sympy` and `numpy` at code-generation time, and the runtime needs only CVODE.
 3. **Reproducibility and distribution of QSP simulators.** SimBiology is the standard authoring environment for QSP models but is not always the most convenient deployment target — open-source CI, reviewers attempting to reproduce results, and downstream researchers using a different toolchain all benefit from a self-contained build that can be exercised independently of the authoring environment. `qsp-codegen`'s output is plain C++ depending only on CVODE, so a model authored interactively in SimBiology can be distributed as an executable that any collaborator can build and run.
-4. **Embeddability inside larger C++ codebases.** The generated `ODE_system` is a plain C++ class with a small header surface, and `qsp_sim_core` links statically against CVODE alone — no Python interpreter and no LLVM JIT in the dependency closure. The codegen and runtime were extracted from a larger GPU agent-based cancer model [@spqsp_pdac], where a C++ host integrates the QSP submodel each step alongside a cell-level agent simulation; the emitted class is shaped by that embedded use case. libRoadRunner and AMICI both ship heavier runtimes (an LLVM JIT and a Python-facing API respectively) that are awkward to drop into a C++-native consumer.
+4. **Embeddability inside larger C++ codebases.** The generated `ODE_system` is a plain C++ class with a small header surface, and `qsp_sim_core` links statically against CVODE alone — no Python interpreter and no LLVM JIT in the dependency closure. The codegen and runtime were extracted from a larger GPU agent-based cancer model [@spqsp_pdac], itself a descendant of the Popel-lab spQSP framework [@Gong2021; @RuizMartinez2022], where a C++ host integrates the QSP submodel each step alongside a cell-level agent simulation; the emitted class is shaped by that embedded use case. libRoadRunner and AMICI both ship heavier runtimes (an LLVM JIT and a Python-facing API respectively) that are awkward to drop into a C++-native consumer.
 
 `qsp-codegen` is not a competitor to AMICI or libRoadRunner for general systems-biology workflows. It occupies a narrower niche: it is the SBML-to-simulator step inside a QSP-specific stack that includes the `qsp-hpc-tools` HPC orchestration layer [@qsp_hpc_tools] and downstream Bayesian inference.
 
@@ -57,7 +71,7 @@ The reproducible benchmark in `paper/benchmark/` exports a 25-compartment, 73-re
 | Integration only, 6-bolus schedule | 0.016 (0.015–0.017) | 0.0018 (0.0017–0.0019) | 8.8× |
 | Wall-clock per invocation, no dosing | 8.467 (8.426–8.513) | 0.0091 (0.0085–0.0097) | ≈930× |
 
-The integration-only regime isolates ODE-solver work. Both engines run CVODE with matched tolerances, so the one-to-two-order-of-magnitude advantage at this model size reflects per-call overhead we did not decompose, and is expected to grow with model size and stiffness. The no-dose C++ figure sits near the resolution of subprocess wall-clock timing minus a calibrated `qsp_sim` startup baseline; the ratio is reported to a leading digit rather than to three. The wall-clock regime is what an SBI workflow pays per call when not using a persistent MATLAB worker pool — MATLAB's process startup dominates and the gap stretches to three orders of magnitude end-to-end.
+The integration-only regime isolates ODE-solver work. Both engines run CVODE with matched tolerances, so the one-to-two-order-of-magnitude advantage at this model size reflects per-call overhead we did not decompose, and is expected to grow with model size and stiffness. The no-dose C++ figure sits near the resolution of subprocess wall-clock timing minus a calibrated `qsp_sim` startup baseline. The wall-clock regime is what an SBI workflow pays per call when not using a persistent MATLAB worker pool — MATLAB's process startup dominates and the gap stretches to three orders of magnitude end-to-end.
 
 # Design and key features
 
@@ -100,6 +114,6 @@ The emitted sources, plus the `qsp_sim_core` runtime located via CMake, build a 
 
 # Acknowledgements
 
-Chase Christenson and Joel Eliason contributed equally to this work and are listed as co-first authors. This work was supported by the National Institutes of Health and the Lustgarten Foundation. The authors thank the Maryland Advanced Research Computing Center (MARCC) for HPC resources used to validate the generated simulator at scale.
+Chase Christenson and Joel Eliason contributed equally to this work and are listed as co-first authors. This work was supported in part by NIH grants R01CA138264 and U01CA212007, NSF grant 2527296, and the Lustgarten Foundation. The authors thank the Maryland Advanced Research Computing Center (MARCC) for HPC resources used to validate the generated simulator at scale.
 
 # References

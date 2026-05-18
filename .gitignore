@@ -5,3 +5,8 @@ __pycache__/
 dist/
 build/
 .pytest_cache/
+
+*.html
+*.pdf
+uv.lock
+paper_files/
