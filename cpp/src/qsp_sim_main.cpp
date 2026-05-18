@@ -138,6 +138,14 @@ struct Args {
     // else 86400.0). Set via --time-unit days|seconds, or directly with
     // --time-factor <N>.
     double time_factor_override = -1.0;
+    // --verbose-evolve: when true, the evolve-to-diagnosis hook prints
+    // every healthy-IC species write + a per-365-day diameter line +
+    // the post-evolve `t_diag=... diameter=...` summary to stderr.
+    // Default false — for parity-trace / hand-debugging only; on a 5k
+    // SBI run the per-sim chatter dominates the log (and crash dumps
+    // capture it on every failure, ballooning failure messages). The
+    // `REJECTED` cerr remains unconditional since it's a hard error.
+    bool verbose_evolve = false;
 };
 
 // Evolve-cache file format (QSTH blob). Fixed 128-byte header followed by
@@ -193,6 +201,10 @@ void print_usage(const char* prog) {
         << "                                       last row = at-diagnosis state).\n"
         << "  --evolve-trajectory-dt-days  <N>     dump every N days of model time\n"
         << "                                       (default 0 = use evolve spec step_days).\n"
+        << "  --verbose-evolve                     stderr-print every healthy-IC species\n"
+        << "                                       write + per-365-day diameter line +\n"
+        << "                                       post-evolve t_diag summary (default\n"
+        << "                                       off; for parity-trace / hand-debug).\n"
         << "\n"
         << "Output cadence:\n"
         << "  --min-cadence-hours <N>  upper bound on inter-row spacing (default 4.0).\n"
@@ -308,6 +320,8 @@ bool parse_args(int argc, char* argv[], Args& out) {
                 std::cerr << "--time-factor must be > 0" << std::endl;
                 return false;
             }
+        } else if (a == "--verbose-evolve") {
+            out.verbose_evolve = true;
         } else if (a == "-h" || a == "--help") {
             return false;
         } else {
@@ -692,7 +706,7 @@ int main(int argc, char* argv[]) {
         EvolveOpts eo;
         eo.yaml_path = args.healthy_yaml;
         eo.time_factor = time_factor;
-        eo.verbose = true;
+        eo.verbose = args.verbose_evolve;
         // Burn-in trajectory dump: same v2 binary format as --binary-out.
         // Reuse the same compartment/rule layout the post-scenario writer
         // emits so downstream readers can use one schema for both phases.
@@ -706,8 +720,10 @@ int main(int argc, char* argv[]) {
                       << er.reject_reason << std::endl;
             return 2;
         }
-        std::cerr << "evolve_to_diagnosis: t_diag=" << er.t_diagnosis_days
-                  << " d, diameter=" << er.diameter_cm << " cm\n";
+        if (args.verbose_evolve) {
+            std::cerr << "evolve_to_diagnosis: t_diag=" << er.t_diagnosis_days
+                      << " d, diameter=" << er.diameter_cm << " cm\n";
+        }
         t_offset = er.t_diagnosis_days * time_factor;
 
         if (!args.dump_state_path.empty()) {
