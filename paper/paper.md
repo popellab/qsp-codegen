@@ -106,6 +106,6 @@ The emitted sources, plus the `qsp_sim_core` runtime located via CMake, build a 
 
 # Acknowledgements
 
-Chase Christenson and Joel Eliason contributed equally to this work and are listed as co-first authors. This work was supported in part by NIH grants R01CA138264 and U01CA212007, NSF grant 2527296, and the Lustgarten Foundation. The authors thank the Maryland Advanced Research Computing Center (MARCC) for HPC resources used to validate the generated simulator at scale.
+Chase Christenson and Joel Eliason contributed equally to this work and are listed as co-first authors. This work was supported in part by NIH grants R01CA138264 and U01CA212007, NSF grant 2527296, and the Lustgarten Foundation: Pancreatic Cancer Research. The authors thank the Advanced Research Computing at Hopkins (ARCH) core facility (rockfish.jhu.edu), supported by NSF grant OAC-1920103, for the HPC resources used to validate the generated simulator at scale.
 
 # References
