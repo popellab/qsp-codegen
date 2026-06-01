@@ -7,8 +7,7 @@ authors:
   - family-names: Christenson
     given-names: Chase
     email: cchris80@jh.edu
-    # TODO: fill in ORCID before JOSS submission
-    # orcid: "https://orcid.org/XXXX-XXXX-XXXX-XXXX"
+    orcid: "https://orcid.org/0000-0003-2395-4408"
     affiliation: "Johns Hopkins University, Department of Biomedical Engineering"
   - family-names: Eliason
     given-names: Joel
@@ -17,13 +16,11 @@ authors:
     affiliation: "Johns Hopkins University, Department of Biomedical Engineering"
   - family-names: Deshpande
     given-names: Atul
-    # TODO: fill in ORCID before JOSS submission
-    # orcid: "https://orcid.org/XXXX-XXXX-XXXX-XXXX"
+    orcid: "https://orcid.org/0000-0001-5144-6924"
     affiliation: "Johns Hopkins University School of Medicine, Department of Oncology"
   - family-names: Popel
     given-names: Aleksander S.
-    # TODO: fill in ORCID before JOSS submission
-    # orcid: "https://orcid.org/XXXX-XXXX-XXXX-XXXX"
+    orcid: "https://orcid.org/0000-0002-6706-9235"
     affiliation: "Johns Hopkins University, Department of Biomedical Engineering"
 repository-code: "https://github.com/popellab/qsp-codegen"
 license: MIT
