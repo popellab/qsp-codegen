@@ -23,14 +23,6 @@ authors:
   - name: Aleksander S. Popel
     orcid: 0000-0002-6706-9235
     affiliation: 1
-  # TODO: pending Sasha's reply — invite as coauthors? They built the spQSP
-  # framework (Gong2021, RuizMartinez2022) that qsp-codegen extracts from.
-  # - name: Chang Gong
-  #   orcid: TODO
-  #   affiliation: TODO
-  # - name: Alvaro Ruiz-Martinez
-  #   orcid: TODO
-  #   affiliation: TODO
 affiliations:
   - name: Department of Biomedical Engineering, Johns Hopkins University, Baltimore, MD, USA
     index: 1
