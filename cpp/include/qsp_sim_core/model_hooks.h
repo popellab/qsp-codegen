@@ -21,7 +21,7 @@
 #include <string>
 #include <vector>
 
-namespace CancerVCT {
+namespace qsp_sim_core {
 
 class ODE_system;
 
@@ -73,6 +73,6 @@ struct EvolveResult {
 // success=true, t_diagnosis_days=0 — i.e. no pre-scenario evolve.
 EvolveResult evolve_to_diagnosis(ODE_system& ode, const EvolveOpts& opts);
 
-}  // namespace CancerVCT
+}  // namespace qsp_sim_core
 
 #endif

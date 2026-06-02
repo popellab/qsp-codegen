@@ -7,36 +7,87 @@ consumed by a CVODEBase-backed QSP simulator:
 
 - `QSP_enum.h`, `ODE_system.h`, `ODE_system.cpp`
 - `QSPParam.h`, `QSPParam.cpp`
-- `qsp_params_xml_snippet.xml` (merged into consumer `param_all.xml` via
-  `qsp-refresh-param-xml`)
+- `param_all.xml` — a complete, ready-to-run parameter file (initial
+  conditions + parameters taken straight from the SBML). Run the generated
+  `qsp_sim` against it directly — no hand-editing, no merge step.
+- `qsp_params_xml_snippet.xml` — the bare `<QSP>` block, for consumers that
+  merge it into a maintained `param_all.xml` via `qsp-refresh-param-xml`.
+
+## Prerequisites
+
+- **Python ≥ 3.10** with `sympy` (for the analytical Jacobian) and `numpy`.
+- **A C++17 compiler + CMake ≥ 3.18** to build the generated simulator. The
+  first configure fetches and compiles SUNDIALS and yaml-cpp via CMake
+  `FetchContent` (one-time, a few minutes).
+- **MATLAB + SimBiology** only if you want to (a) export SBML from a
+  SimBiology model or (b) run `qsp-codegen verify` against a SimBiology
+  reference. Pure SBML-in → C++-out needs neither.
 
 ## Install
 
 ```bash
-pip install ~/Projects/qsp-codegen
+pip install ~/Projects/qsp-codegen        # or: uv pip install -e ~/Projects/qsp-codegen
 ```
 
-## Usage
+## Quick start (SBML in → trajectories out)
 
 ```bash
-qsp-codegen --sbml path/to/PDAC_model.sbml --out-dir path/to/ode/
+# 1. Generate C++ + a ready-to-run param file from a SimBiology SBML export.
+qsp-codegen generate --sbml MyModel.sbml --out-dir build/qsp/ode
 
-qsp-refresh-param-xml \
-    --snippet path/to/ode/qsp_params_xml_snippet.xml \
-    --xml path/to/param_all.xml \
-    --xml path/to/param_all_test.xml
+# 2. Build a minimal qsp_sim against the generated ODE (driver + ODE, default
+#    no-op init hook). See "Bundled C++ driver" below for the CMakeLists; or
+#    let `qsp-codegen verify` scaffold and build it for you.
+cmake -S build/sim -B build/sim/build -DCMAKE_BUILD_TYPE=Release
+cmake --build build/sim/build --target qsp_sim -j4
+
+# 3. Run it directly against the emitted param_all.xml — no hand-editing.
+build/sim/build/qsp_sim build/qsp/ode/param_all.xml out.csv 365 4.0
 ```
 
-Run whenever the QSP model structure changes (species/parameters/reactions).
-Not needed for parameter-value tweaks.
+The legacy form `qsp-codegen --sbml … --out-dir …` (no `generate` word) still
+works. Re-run codegen whenever the model *structure* changes
+(species/parameters/reactions); not needed for parameter-value tweaks.
 
-## Scope
+## Self-test: does the C++ match SimBiology?
 
-- Parses SBML Level 2 v4 (SimBiology export dialect).
-- Derives analytical Jacobian via sympy + CSE when sympy is available;
-  falls back to numerical Jacobian otherwise.
-- Consumer-side invariants (sync checks, ABM-specific param codegen) are
-  *not* in scope — they live in the consumer repo.
+`qsp-codegen verify` runs the whole pipeline end-to-end — codegen, scaffold +
+build a minimal `qsp_sim`, then compare its trajectories against a MATLAB
+SimBiology reference over the same window — and reports PASS/FAIL:
+
+```bash
+qsp-codegen verify \
+    --sbml MyModel.sbml \
+    --matlab-dir /path/to/model/repo \      # has startup.m + the model script
+    --matlab-script build_my_model \        # builds `model`; must NOT `clear`
+    --stop-time 365
+```
+
+## Supported SBML features
+
+Parses **SBML Level 2 v4** (the SimBiology export dialect):
+
+- **Rate-law math**: the full SBML L2 operator set, including SimBiology's
+  `<ci>`-exported named operators (`max`, `min`, `nthroot`, …), `<root>` with
+  `<degree>`, and the trig / hyperbolic / log families.
+- **User functions**: SBML `<functionDefinition>` lambdas are inlined at their
+  call sites.
+- **Rules**: assignment (`repeatedAssignment`) and initial assignments,
+  including dynamic compartment volumes (e.g. a growing tumor compartment).
+- **Events**: single-comparison triggers (`lt`/`leq`/`gt`/`geq`) with event
+  assignments, mapped to CVODE root functions. *Not yet supported* (fail
+  loudly with a clear message): event `<delay>`s and compound (`and`/`or`)
+  triggers.
+- **Jacobian**: analytical via sympy + CSE when sympy is present; numerical
+  fallback otherwise.
+- **Units**: converts `<listOfUnitDefinitions>` to SI for integration (see
+  *Time units* below).
+
+Anything outside this surface raises a **located, human-readable error** at
+codegen time (naming the operator/function/event) rather than emitting broken
+C++ — and the generator self-checks its output for undefined temporaries
+before writing. Consumer-side invariants (sync checks, ABM-specific param
+codegen) are out of scope — they live in the consumer repo.
 
 ## Bundled C++ driver (`qsp_sim_core`)
 
