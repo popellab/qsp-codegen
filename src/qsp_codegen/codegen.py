@@ -51,11 +51,14 @@ class SBMLModel:
         self.initial_assignments: List[dict] = []
         self.events: List[dict] = []
         self.unit_defs: Dict[str, float] = {}     # unit_id → SI factor
+        # SBML <functionDefinition> id → {"bvars": [...], "body": <Element>}
+        self.function_defs: Dict[str, dict] = {}
 
         self._parse_units()
         self._parse_compartments()
         self._parse_parameters()  # before species (species may ref param units)
         self._parse_species()
+        self._parse_function_definitions()  # before reactions/rules (they may call them)
         self._parse_reactions()
         self._parse_rules()
         self._parse_initial_assignments()
@@ -317,6 +320,63 @@ class SBMLModel:
 
     # --- MathML → Infix Converter ----------------------------------------
 
+    def _parse_function_definitions(self):
+        """Parse <functionDefinition> lambdas so calls can be inlined.
+
+        SBML stores a user function as ``<lambda><bvar><ci>x</ci></bvar> ...
+        <body/></lambda>``. We keep the bound-variable names and the body
+        MathML element; :meth:`_inline_function_def` substitutes call-site
+        arguments for the bvars and converts the body in place.
+        """
+        for fd in self.model.findall(f".//{SBML_NS}functionDefinition"):
+            fid = fd.get("id")
+            math = fd.find(f"{MATH_NS}math")
+            if not fid or math is None:
+                continue
+            lam = math.find(f"{MATH_NS}lambda")
+            if lam is None:
+                continue
+            bvars, body = [], None
+            for child in lam:
+                if child.tag.replace(MATH_NS, "") == "bvar":
+                    ci = child.find(f"{MATH_NS}ci")
+                    if ci is not None and ci.text:
+                        bvars.append(ci.text.strip())
+                else:
+                    body = child  # last non-bvar child is the function body
+            if body is not None:
+                self.function_defs[fid] = {"bvars": bvars, "body": body}
+
+    def _inline_function_def(self, name: str, arg_nodes) -> str:
+        """Inline a call to an SBML <functionDefinition> as infix C++.
+
+        Converts each actual argument, then converts the lambda body with the
+        bound variables temporarily resolving to those argument expressions.
+        Reentrant: nested/self-referential calls save and restore the shadowed
+        id_to_name entries.
+        """
+        fd = self.function_defs[name]
+        bvars, body = fd["bvars"], fd["body"]
+        if len(arg_nodes) != len(bvars):
+            raise ValueError(
+                f"SBML functionDefinition '{name}' expects {len(bvars)} "
+                f"argument(s), called with {len(arg_nodes)}."
+            )
+        arg_infix = [f"({self._mathml_to_infix(a)})" for a in arg_nodes]
+        missing = object()
+        saved = {}
+        for bv, ai in zip(bvars, arg_infix):
+            saved[bv] = self.id_to_name.get(bv, missing)
+            self.id_to_name[bv] = ai
+        try:
+            return f"({self._mathml_to_infix(body)})"
+        finally:
+            for bv, old in saved.items():
+                if old is missing:
+                    self.id_to_name.pop(bv, None)
+                else:
+                    self.id_to_name[bv] = old
+
     def _mathml_to_infix(self, node) -> str:
         """Convert a MathML <math> or <apply> tree to infix C++ string.
 
@@ -358,13 +418,37 @@ class SBMLModel:
             op_node = children[0]
             op_tag = op_node.tag.replace(MATH_NS, "")
 
-            # SimBiology exports max/min as <ci>max</ci> instead of <max/>
+            # SimBiology exports several operators as <ci>name</ci> rather
+            # than a native MathML tag (e.g. <ci>max</ci>, <ci>nthroot</ci>).
+            # Treat any <ci> naming a known math function as that operator and
+            # dispatch it like a native tag. Keep this set in sync with the
+            # functions _apply_op (and the <root> branch) can emit.
             if op_tag == "ci":
                 func_name = (op_node.text or "").strip()
-                _CI_FUNCTIONS = {"max", "min", "abs", "floor", "ceil",
-                                 "exp", "log", "ln", "sqrt", "power"}
+                # User-defined SBML <functionDefinition> lambda: inline it.
+                if func_name in self.function_defs:
+                    return self._inline_function_def(func_name, children[1:])
+                _CI_FUNCTIONS = {
+                    "max", "min", "abs", "floor", "ceil", "ceiling",
+                    "exp", "ln", "log", "log2", "log10", "sqrt",
+                    "power", "nthroot",
+                    "sin", "cos", "tan", "sinh", "cosh", "tanh",
+                    "asin", "acos", "atan",
+                }
                 if func_name in _CI_FUNCTIONS:
                     op_tag = func_name
+                else:
+                    # A <ci> operator that is neither a known math function nor
+                    # a parsed <functionDefinition>. Fail loudly with context
+                    # rather than emitting a comment that later crashes the
+                    # Jacobian sympify with no breadcrumb.
+                    raise ValueError(
+                        f"Unsupported function '{func_name}' applied in a "
+                        f"MathML expression: not a known SBML L2 math operator "
+                        f"(see _mathml_to_infix) and not a <functionDefinition> "
+                        f"in this model. If it is a standard function, add it "
+                        f"to _CI_FUNCTIONS and _apply_op."
+                    )
 
             # Handle <root> specially: extract <degree> child
             if op_tag == "root":
@@ -448,6 +532,9 @@ class SBMLModel:
             "log10": "std::log10", "exp": "std::exp", "sqrt": "std::sqrt",
             "abs": "std::abs", "floor": "std::floor", "ceiling": "std::ceil",
             "sin": "std::sin", "cos": "std::cos", "tan": "std::tan",
+            "sinh": "std::sinh", "cosh": "std::cosh", "tanh": "std::tanh",
+            "asin": "std::asin", "acos": "std::acos", "atan": "std::atan",
+            "ceil": "std::ceil",
         }
         if op in func_map:
             return f"{func_map[op]}({', '.join(args)})"
@@ -475,7 +562,18 @@ class SBMLModel:
                 return f"std::pow({args[1]}, 1.0 / {args[0]})"
             return f"std::sqrt({args[0]})"
 
-        return f"/* unknown op: {op} */({', '.join(args)})"
+        if op == "nthroot":
+            # SimBiology's <ci>nthroot</ci>: nthroot(x, n) == x^(1/n).
+            # Args are (radicand, degree) — the reverse of <root>'s order.
+            if len(args) == 2:
+                return f"std::pow({args[0]}, 1.0 / ({args[1]}))"
+            return f"std::sqrt({args[0]})"
+
+        raise ValueError(
+            f"Unsupported MathML operator '{op}'. Add a handler in _apply_op "
+            f"(and list it in _mathml_to_infix's <ci> set if SimBiology "
+            f"exports it as <ci>{op}</ci>)."
+        )
 
     def _convert_piecewise(self, node) -> str:
         """Convert MathML <piecewise> to C++ ternary."""
@@ -1230,7 +1328,7 @@ def gen_enum_h(sbml: SBMLModel) -> str:
         "",
         "#include <utility>",
         "",
-        "namespace CancerVCT{",
+        "namespace qsp_sim_core{",
         "",
         "// QSP Species Enum (ODE state vector indices)",
         "enum QSPSpeciesEnum",
@@ -1273,7 +1371,7 @@ def gen_enum_h(sbml: SBMLModel) -> str:
     lines.append(f"QSP_FILE_PARAM_COUNT")
     lines.append("};")
     lines.append("")
-    lines.append("}  // namespace CancerVCT")
+    lines.append("}  // namespace qsp_sim_core")
     return "\n".join(lines) + "\n"
 
 
@@ -1299,8 +1397,8 @@ def gen_ode_h(jac_nnz: int = 0) -> str:
             '    CVLsJacFn getJacobianFn() const override { return &ODE_system::jac; }\n'
         )
 
-    return ('''#ifndef __CancerVCT_ODE__
-#define __CancerVCT_ODE__
+    return ('''#ifndef __qsp_sim_core_ODE__
+#define __qsp_sim_core_ODE__
 
 // Auto-generated by qsp_codegen.py from SBML — do not edit manually
 
@@ -1310,7 +1408,7 @@ def gen_ode_h(jac_nnz: int = 0) -> str:
 #include <string>
 #include <vector>
 
-namespace CancerVCT{
+namespace qsp_sim_core{
 
 class ODE_system :
     public CVODEBase
@@ -1395,7 +1493,7 @@ inline void ODE_system::set_class_param(unsigned int i, double v){
     _class_parameter[i] = v;
 }
 
-}  // namespace CancerVCT
+}  // namespace qsp_sim_core
 #endif
 ''')
 
@@ -1411,7 +1509,7 @@ def gen_ode_cpp(sbml: SBMLModel, mapping: dict) -> str:
     lines.append('#define PARAM(x) _class_parameter[x]')
     lines.append('#define PFILE(x) param.getVal(x)')
     lines.append('')
-    lines.append('namespace CancerVCT{')
+    lines.append('namespace qsp_sim_core{')
     lines.append('#define QSP_W ODE_system::_QSP_weight')
     lines.append('')
     lines.append('bool ODE_system::use_steady_state = false;')
@@ -1978,6 +2076,18 @@ def gen_ode_cpp(sbml: SBMLModel, mapping: dict) -> str:
                         collect_ar_deps(other_vn)
         for r, sp in ar_species:
             collect_ar_deps(r["variable_name"])
+            # A concentration rule-species writes back as
+            # `_species_var[SP] = AUX_VAR * AUX_VAR_{comp}` when its
+            # compartment volume is itself an assignment rule (dynamic
+            # volume, e.g. a growing tumor compartment V_T). That multiplier
+            # is introduced by the writeback, not by the rule expression, so
+            # collect_ar_deps over the expression alone misses it and
+            # AUX_VAR_{comp} is emitted undefined. Seed it explicitly, the
+            # same way the output generator seeds dynamic compartment volumes.
+            if not sp.get("has_only_substance_units", False):
+                comp_name = sp["compartment"]
+                if comp_name in rule_names_ar:
+                    collect_ar_deps(comp_name)
         needed_list = [r for r in sbml.assignment_rules if r["variable_name"] in needed_rules]
         ordered_needed = order_rules(needed_list, needed_rules, sbml=sbml)
 
@@ -2119,7 +2229,7 @@ def gen_ode_cpp(sbml: SBMLModel, mapping: dict) -> str:
     # via CVodeSetJacFn when built with KLU support; dense builds ignore it.
     if gen_ode_cpp._jacobian_info is not None:
         lines.append(gen_jacobian_cpp(sbml, gen_ode_cpp._jacobian_info))
-    lines.append('}  // namespace CancerVCT')
+    lines.append('}  // namespace qsp_sim_core')
     return "\n".join(lines) + "\n"
 
 
@@ -2129,14 +2239,14 @@ gen_ode_cpp._jacobian_info = None
 
 
 def gen_qsp_param_h() -> str:
-    return '''#ifndef __CancerVCT_QSPParam__
-#define __CancerVCT_QSPParam__
+    return '''#ifndef __qsp_sim_core_QSPParam__
+#define __qsp_sim_core_QSPParam__
 
 // Auto-generated by qsp_codegen.py from SBML — do not edit manually
 
 #include "qsp_sim_core/ParamBase.h"
 
-namespace CancerVCT{
+namespace qsp_sim_core{
 
 class QSPParam : public SP_QSP_IO::ParamBase
 {
@@ -2157,7 +2267,7 @@ private:
     static const char* _xml_paths[];
 };
 
-}  // namespace CancerVCT
+}  // namespace qsp_sim_core
 #endif
 '''
 
@@ -2172,7 +2282,7 @@ def gen_qsp_param_cpp(sbml: SBMLModel) -> str:
     lines.append('#include <boost/property_tree/xml_parser.hpp>')
     lines.append('#include <iostream>')
     lines.append('')
-    lines.append('namespace CancerVCT{')
+    lines.append('namespace qsp_sim_core{')
     lines.append('')
 
     # XML paths: Compartment ICs, Species ICs, Model Parameters
@@ -2214,7 +2324,7 @@ def gen_qsp_param_cpp(sbml: SBMLModel) -> str:
     lines.append('        std::cout << _xml_paths[i] << " = " << _param[i] << std::endl;')
     lines.append('}')
     lines.append('')
-    lines.append('}  // namespace CancerVCT')
+    lines.append('}  // namespace qsp_sim_core')
     return "\n".join(lines) + "\n"
 
 
@@ -2265,6 +2375,83 @@ def gen_xml_snippet(sbml: SBMLModel) -> str:
 # Main
 # =========================================================================
 
+_AUX_DECL_RE = re.compile(r"\brealtype\s+(AUX_VAR_\w+)\s*=")
+_AUX_USE_RE = re.compile(r"\bAUX_VAR_\w+\b")
+
+
+def validate_generated_cpp(cpp: str, filename: str = "ODE_system.cpp") -> None:
+    """Catch use-before-definition of ``AUX_VAR_*`` temporaries at codegen time.
+
+    The generator emits assignment-rule / compartment-volume temporaries as
+    function-local ``realtype AUX_VAR_x = ...;``. A dependency-ordering bug can
+    emit a *use* of ``AUX_VAR_x`` in a function/block where it was never
+    declared (e.g. a concentration rule-species whose dynamic compartment
+    volume multiplier was not seeded into the block's dependency closure).
+    That otherwise surfaces only as an opaque C++ compiler error pointing at
+    machine-generated line numbers; here we fail at generation time with a
+    located, human-readable message.
+
+    Scoping model: a stack of brace scopes (the file's ``namespace`` is the
+    outermost). An ``AUX_VAR`` is in scope if declared in the current or any
+    enclosing scope, and — within a scope — a declaration must precede its
+    uses (C++ rule). Each function body is its own scope, so the same temp may
+    legitimately be redeclared across functions.
+    """
+    scopes: List[set] = [set()]
+    offenders: List[Tuple[int, str]] = []
+    for lineno, line in enumerate(cpp.splitlines(), 1):
+        # Process the line as an ordered sequence of brace tokens and
+        # ';'-separated statements (one-statement-per-line is the usual
+        # generated form, but handling multiple keeps this robust). Within a
+        # statement, uses are checked against the current scope chain *before*
+        # the statement's own declaration is registered, so same-statement
+        # `realtype AUX_VAR_x = <uses>` and same-line `... ; ... AUX_VAR_x`
+        # both resolve correctly.
+        for seg in re.split(r"([{};])", line):
+            if seg == "{":
+                scopes.append(set())
+            elif seg == "}":
+                if len(scopes) > 1:
+                    scopes.pop()
+            elif seg in (";", ""):
+                continue
+            else:
+                decl = _AUX_DECL_RE.search(seg)
+                # On a declaration the LHS name is being declared, not used —
+                # only scan the RHS (after '=') for uses.
+                check_region = seg[decl.end():] if decl else seg
+                in_scope = set().union(*scopes)
+                for m in _AUX_USE_RE.finditer(check_region):
+                    if m.group(0) not in in_scope:
+                        offenders.append((lineno, m.group(0)))
+                if decl is not None:
+                    scopes[-1].add(decl.group(1))
+
+    if offenders:
+        first = offenders[0]
+        raise ValueError(
+            f"Generated {filename} references {len(offenders)} undefined "
+            f"AUX_VAR temporary(ies) — a codegen dependency-ordering bug. "
+            f"First: '{first[1]}' used before declaration at line {first[0]}. "
+            f"This means an assignment-rule/compartment-volume dependency was "
+            f"not seeded into a block's emission closure."
+        )
+
+
+def wrap_param_xml(snippet: str) -> str:
+    """Wrap a codegen ``<QSP>`` snippet into a complete, runnable param_all.xml.
+
+    The snippet emitted alongside the C++ is a bare ``<QSP>...</QSP>`` block
+    (for consumers that merge it into a maintained file via
+    qsp-refresh-param-xml). Wrapping it in ``<Param>`` yields a file the
+    generated ``qsp_sim`` can read directly — no hand-editing, no merge step.
+    """
+    s = snippet.strip()
+    if not (s.startswith("<QSP>") and s.endswith("</QSP>")):
+        raise ValueError("snippet is not a bare <QSP> block")
+    return '<?xml version="1.0" encoding="utf-8"?>\n<Param>\n' + s + "\n</Param>\n"
+
+
 def generate(sbml_path: str, out_dir: str) -> Dict[str, str]:
     """Run codegen for the given SBML, writing all outputs under ``out_dir``.
 
@@ -2300,14 +2487,24 @@ def generate(sbml_path: str, out_dir: str) -> Dict[str, str]:
         jac_nnz = 0
 
     print("\nGenerating C++ files...")
+    xml_snippet = gen_xml_snippet(sbml)
     files = {
         "QSP_enum.h": gen_enum_h(sbml),
         "ODE_system.h": gen_ode_h(jac_nnz=jac_nnz),
         "ODE_system.cpp": gen_ode_cpp(sbml, mapping),
         "QSPParam.h": gen_qsp_param_h(),
         "QSPParam.cpp": gen_qsp_param_cpp(sbml),
-        "qsp_params_xml_snippet.xml": gen_xml_snippet(sbml),
+        "qsp_params_xml_snippet.xml": xml_snippet,
+        # Complete, ready-to-run parameter file (ICs + params straight from the
+        # SBML). Lets users run the generated qsp_sim immediately — no manual
+        # <Param> wrapping, no qsp-refresh-param-xml merge. The bare snippet
+        # above is still emitted for the merge-into-maintained-file workflow.
+        "param_all.xml": wrap_param_xml(xml_snippet),
     }
+
+    # Fail fast on generated-code dependency-ordering bugs (clear message at
+    # codegen time, vs. an opaque C++ compiler error on generated lines).
+    validate_generated_cpp(files["ODE_system.cpp"])
 
     os.makedirs(out_dir, exist_ok=True)
     for fname, content in files.items():
@@ -2320,23 +2517,44 @@ def generate(sbml_path: str, out_dir: str) -> Dict[str, str]:
     return files
 
 
+def _handle_generate(args) -> int:
+    generate(args.sbml, args.out_dir)
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+    # Back-compat: the original CLI was `qsp-codegen --sbml X --out-dir Y` with
+    # no subcommand. If the first token is an option (not -h/--help), assume the
+    # `generate` subcommand so existing callers (Makefiles, scripts) keep working.
+    if argv and argv[0].startswith("-") and argv[0] not in ("-h", "--help"):
+        argv = ["generate", *argv]
+
     parser = argparse.ArgumentParser(
         description="SBML → C++ CVODE ODE code generator.",
     )
-    parser.add_argument(
-        "--sbml",
-        required=True,
+    sub = parser.add_subparsers(dest="command")
+
+    gen = sub.add_parser("generate", help="Generate C++ ODE sources from SBML.")
+    gen.add_argument(
+        "--sbml", required=True,
         help="Path to SBML Level 2 v4 file (e.g. PDAC_model.sbml).",
     )
-    parser.add_argument(
-        "--out-dir",
-        required=True,
+    gen.add_argument(
+        "--out-dir", required=True,
         help="Directory where generated C++ sources are written.",
     )
+    gen.set_defaults(_handler=_handle_generate)
+
+    from .verify import add_subparser as _add_verify
+    _add_verify(sub)
+
     args = parser.parse_args(argv)
-    generate(args.sbml, args.out_dir)
-    return 0
+    if not getattr(args, "command", None):
+        parser.print_help()
+        return 1
+    return args._handler(args)
 
 
 if __name__ == "__main__":

@@ -10,7 +10,7 @@
 
 #include "qsp_sim_core/model_hooks.h"
 
-namespace CancerVCT {
+namespace qsp_sim_core {
 
 EvolveResult evolve_to_diagnosis(ODE_system& /*ode*/, const EvolveOpts& /*opts*/) {
     EvolveResult r;
@@ -20,4 +20,4 @@ EvolveResult evolve_to_diagnosis(ODE_system& /*ode*/, const EvolveOpts& /*opts*/
     return r;
 }
 
-}  // namespace CancerVCT
+}  // namespace qsp_sim_core

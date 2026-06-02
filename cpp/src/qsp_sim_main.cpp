@@ -74,7 +74,7 @@
 #include "qsp_sim_core/model_hooks.h"
 #include "qsp_sim_core/trajectory_writer.h"
 
-using namespace CancerVCT;
+using namespace qsp_sim_core;
 
 namespace {
 

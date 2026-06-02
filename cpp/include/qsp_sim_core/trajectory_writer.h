@@ -44,7 +44,7 @@
 #include <ostream>
 #include <stdexcept>
 
-namespace CancerVCT {
+namespace qsp_sim_core {
 
 class TrajectoryWriter {
 public:
@@ -128,6 +128,6 @@ private:
     uint64_t n_times_ = 0;
 };
 
-}  // namespace CancerVCT
+}  // namespace qsp_sim_core
 
 #endif  // QSP_SIM_CORE_TRAJECTORY_WRITER_H
