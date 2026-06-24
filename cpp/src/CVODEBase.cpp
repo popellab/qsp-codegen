@@ -7,7 +7,15 @@
 #include <stdexcept>
 #include <string>
 
-const int mxstep = 500000;
+// Max internal CVODE steps per integration call (CVodeSetMaxNumSteps).
+// Lowered 500000 -> 50000: with a per-call MaxStep on the order of the output
+// cadence, a well-behaved integration crosses one interval in O(1-100) steps,
+// so 50000 still leaves ~3 orders of magnitude of headroom. The old 500000
+// let a stiff/near-singular parameter draw grind ~half a million microscopic
+// BDF steps (~3 min wall) before CV_TOO_MUCH_WORK tripped — a "straggler" that
+// stalls batch/SBI walltime to reach a failure detectable far sooner. At 50000
+// the same draw fails ~10x faster while valid sims are unaffected.
+const int mxstep = 50000;
 
 CVODEBase::CVODEBase()
 : _species_var()
