@@ -61,6 +61,7 @@ class SBMLModel:
         self._parse_function_definitions()  # before reactions/rules (they may call them)
         self._parse_reactions()
         self._parse_rules()
+        self._parse_rate_rules()  # after parameters/species/reactions/rules exist
         self._parse_initial_assignments()
         self._parse_events()
 
@@ -229,6 +230,55 @@ class SBMLModel:
                 "variable_id": var_id,
                 "variable_name": var_name,
                 "expression": expr,
+            })
+
+    def _parse_rate_rules(self):
+        """Promote each <rateRule> on a constant=false parameter to a state.
+
+        SimBiology models an abstract non-physical state (e.g. a dimensionless
+        niche fraction) as a parameter with ConstantValue=false plus a rate
+        rule, rather than as a species. The generator has no native rate-rule
+        path, so we promote the parameter to an amount-tracked pseudo-species
+        (state slot + SP_ enum + initial value) and inject a single synthetic
+        production reaction whose rate law IS the rate-rule expression
+        (d(var)/dt = expr). The existing stoichiometry -> ydot -> Jacobian ->
+        RHS machinery then evolves it like any other state, with no special
+        casing downstream. Rate rules whose target is a species (already a
+        state) are left to the normal reaction path.
+        """
+        params_by_id = {p["id"]: p for p in self.parameters}
+        for rr in self.model.findall(f".//{SBML_NS}rateRule"):
+            var_id = rr.get("variable")
+            param = params_by_id.get(var_id)
+            if param is None:
+                continue  # target is a species or unknown — not the param path
+            math = rr.find(f"{MATH_NS}math")
+            expr = self._mathml_to_infix(math) if math is not None else "0"
+            var_name = param["name"]
+            # Promote: drop from parameters, add as a dimensionless amount-
+            # tracked pseudo-species (has_only_substance_units -> no volume
+            # scaling; compartment unused). id_to_name[var_id] already maps to
+            # var_name from _parse_parameters, so reaction-rate references and
+            # the synthetic product resolve to SPVAR(SP_<var_name>).
+            self.parameters = [p for p in self.parameters if p["id"] != var_id]
+            self.species.append({
+                "id": var_id,
+                "name": var_name,
+                "base_name": var_name,
+                "compartment": None,
+                "initial_value": param["value"],
+                "is_initial_concentration": False,
+                "units": param.get("units", "dimensionless"),
+                "has_only_substance_units": True,
+                "is_rate_ruled": True,
+            })
+            self.reactions.append({
+                "name": f"raterule_{var_name}",
+                "reactant_ids": [],
+                "product_ids": [var_id],
+                "reactant_names": [],
+                "product_names": [var_name],
+                "rate_law": expr,
             })
 
     # Supported comparison ops → (C++ op, root convention).
