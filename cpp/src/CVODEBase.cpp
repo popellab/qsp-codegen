@@ -599,6 +599,21 @@ double CVODEBase::simOdeStepOne(double tEndClamp){
 	if (flag != CV_TOO_CLOSE) {
 		check_flag(&flag, "CVode", 1);
 	}
+	// CV_ONE_STEP advances exactly one internal step per CVode() call, so the
+	// CVodeSetMaxNumSteps(mxstep) ceiling — which bounds steps PER call — never
+	// trips here the way it does on the CV_NORMAL path (where a whole interval
+	// is a single call and CVODE raises CV_TOO_MUCH_WORK at mxstep). Without a
+	// manual guard the one-step scenario/evolve loops have NO total-work
+	// ceiling: a stiff / near-singular draw crawls in sub-ULP steps until an
+	// external per-sim timeout kills it (minutes of wall time). getNumSteps() is
+	// the cumulative step count since the last re-init (i.e. per integration
+	// segment — the same unit a CV_NORMAL call spans), so once it crosses mxstep
+	// the segment is grinding. Raise CV_TOO_MUCH_WORK to fail the draw in
+	// seconds, identical to what CV_NORMAL would produce → NaN downstream.
+	if (getNumSteps() > mxstep) {
+		int too_much = CV_TOO_MUCH_WORK;
+		check_flag(&too_much, "CVode (CV_ONE_STEP mxstep budget exceeded)", 1);
+	}
 	save_y();
 	update_y_other();
 	return static_cast<double>(t_ret);
